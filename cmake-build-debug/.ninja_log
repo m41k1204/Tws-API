@@ -1,0 +1,8 @@
+# ninja log v6
+5	1053	1741305324315891500	CMakeFiles/tws.dir/main.cpp.o	fe3c4b7fca562ca4
+2	2799	1741306640748456480	CMakeFiles/tws.dir/src/TwsApi.cpp.o	967c730168da0c01
+2807	2965	1741306643553441268	tws	4bbdb3527ee54ff6
+7	738	1741307587765960982	CMakeFiles/tws.dir/src/DecimalFunctions.cpp.o	d93de0c0508dfcad
+6	3466	1741307587764960981	CMakeFiles/tws.dir/main.cpp.o	fe3c4b7fca562ca4
+6	12336	1741307587764960981	CMakeFiles/tws.dir/src/TwsApi.cpp.o	967c730168da0c01
+12336	12467	1741307600094967763	tws	b451eb1dedaf66f6

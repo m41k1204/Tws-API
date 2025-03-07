@@ -1,0 +1,3 @@
+/home/m41k1/Documents/freelance/tws/cmake-build-debug/CMakeFiles/tws.dir
+/home/m41k1/Documents/freelance/tws/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/m41k1/Documents/freelance/tws/cmake-build-debug/CMakeFiles/rebuild_cache.dir
