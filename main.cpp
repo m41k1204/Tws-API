@@ -1,7 +1,38 @@
+#include <iomanip>
+
 #include "TwsApi.h"
 #include <iostream>
 #include <string>
 #include <vector>
+
+
+// int main()
+// {
+//     TwsApi api;
+//
+//     // Connect to TWS.
+//     api.connect("127.0.0.1", 7497, 0);
+//
+//     // Request all open orders.
+//     api.reqAllOpenOrders();
+//     std::this_thread::sleep_for(std::chrono::seconds(1));
+//
+//     // Retrieve and print the open orders.
+//     auto orders = api.list_orders("", 100, "", "", "asc", "", "");
+//     for (const auto& order : orders) {
+//         std::cout << "OrderID: " << order.orderId
+//                   << ", OrderRef: " << order.orderRef
+//                   << ", Symbol: " << order.symbol
+//                   << ", Status: " << order.status
+//                   << ", Side: " << order.side << std::endl;
+//     }
+//
+//     // Disconnect from TWS.
+//     api.disconnect();
+//
+//     return 0;
+// }
+
 
 int main() {
     TwsApi api;
@@ -60,7 +91,7 @@ int main() {
                 std::cin >> idOrdenCliente;
 
                 OrderResult resultado = api.submit_order_stock(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop, idOrdenCliente);
-                std::cout << "Orden de acciones enviada: id = " << resultado.id << ", estado = " << resultado.status << std::endl;
+                std::cout << "Orden de acciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
                 break;
             }
             case 2: { // Enviar orden de opciones
@@ -89,35 +120,63 @@ int main() {
                 std::cin >> stopLoss;
 
                 OrderResult resultado = api.submit_order_option(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop, idOrdenCliente, takeProfit, stopLoss);
-                std::cout << "Orden de opciones enviada: id = " << resultado.id << ", estado = " << resultado.status << std::endl;
+                std::cout << "Orden de opciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
                 break;
             }
             case 3: { // Listar órdenes
                 std::string estado, despues, hasta, direccion, simbolos, filtroLado;
                 int limite;
-                std::cout << "Ingrese el estado de las órdenes (open/closed/all): ";
-                std::cin >> estado;
                 std::cout << "Ingrese el límite: ";
                 std::cin >> limite;
-                std::cout << "Ingrese 'después' (timestamp, o dejar vacío): ";
-                std::cin.ignore(); // Limpiar el salto de línea
-                std::getline(std::cin, despues);
-                std::cout << "Ingrese 'hasta' (timestamp, o dejar vacío): ";
-                std::getline(std::cin, hasta);
                 std::cout << "Ingrese la dirección (asc/desc): ";
                 std::cin >> direccion;
-                std::cout << "Ingrese los símbolos (separados por comas, o dejar vacío): ";
+                std::cout << "Ingrese los símbolos (separados por comas, (all para todos) ): ";
                 std::cin >> simbolos;
-                std::cout << "Ingrese el filtro de lado (buy/sell, o dejar vacío): ";
+                if (simbolos == "all") {simbolos = "";}
+                std::cout << "Ingrese el filtro de lado (BUY/SELL, (all para todos)): ";
                 std::cin >> filtroLado;
+                if (filtroLado == "all") {filtroLado = "";}
+
+                api.reqAllOpenOrders();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
                 std::vector<OrderResult> ordenes = api.list_orders(estado, limite, despues, hasta, direccion, simbolos, filtroLado);
-                for (const auto& orden : ordenes)
-                    std::cout << "Orden: id = " << orden.id << ", estado = " << orden.status << std::endl;
+                std::cout << "\nOrdenes:\n\n";
+
+                // Print header row with fixed width columns.
+                std::cout << std::left
+                          << std::setw(10) << "OrderID"
+                          << std::setw(15) << "OrderRef"
+                          << std::setw(10) << "Symbol"
+                          << std::setw(15) << "Status"
+                          << std::setw(10) << "Side"
+                          << std::setw(10) << "Quantity"
+                          << std::setw(12) << "OrderType"
+                          << std::setw(8)  << "TIF"
+                          << std::setw(12) << "Limit Price"
+                          << std::setw(12) << "Stop Price"
+                          << std::endl;
+
+                std::cout << std::string(110, '-') << std::endl;
+
+                for (const auto& order : ordenes) {
+                    std::cout << std::left
+                              << std::setw(10) << order.orderId
+                              << std::setw(15) << order.orderRef
+                              << std::setw(10) << order.symbol
+                              << std::setw(15) << order.status
+                              << std::setw(12) << order.side
+                              << std::setw(10) << order.qty
+                              << std::setw(10) << order.orderType
+                              << std::setw(12)  << order.tif
+                              << std::setw(12) << order.limit_price
+                              << std::setw(12) << order.stop_price
+                              << std::endl;
+                }
                 break;
             }
             case 4: { // Cancelar orden
-                std::string idOrden;
+                OrderId idOrden;
                 std::cout << "Ingrese el id de la orden a cancelar: ";
                 std::cin >> idOrden;
                 api.cancel_order(idOrden);
@@ -177,21 +236,26 @@ int main() {
                 break;
             }
             case 11: { // Modificar orden
-                std::string idOrdenCliente, tif;
+                OrderId order_id;
+                std::string  tif;
                 int cantidad;
                 double precioLimite, precioStop;
-                std::cout << "Ingrese el id de la orden del cliente: ";
-                std::cin >> idOrdenCliente;
-                std::cout << "Ingrese la nueva cantidad: ";
+                std::cout << "Ingrese el id de la orden: ";
+                std::cin >> order_id;
+                std::cout << "Ingrese la nueva cantidad ( 0 si no aplica ) :";
                 std::cin >> cantidad;
-                std::cout << "Ingrese el nuevo tiempo en vigor (DAY/GTC): ";
+                std::cout << "Ingrese el nuevo tiempo en vigor (DAY/GTC) ( - si no aplica ) :";
                 std::cin >> tif;
                 std::cout << "Ingrese el nuevo precio límite (0 si no se modifica): ";
                 std::cin >> precioLimite;
                 std::cout << "Ingrese el nuevo precio de stop (0 si no se modifica): ";
                 std::cin >> precioStop;
-                OrderResult res = api.change_order_by_order_id(idOrdenCliente, cantidad, tif, precioLimite, precioStop);
-                std::cout << "Orden modificada: id = " << res.id << ", estado = " << res.status << std::endl;
+
+                api.reqAllOpenOrders();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                OrderResult res = api.change_order_by_order_id(order_id, cantidad, tif, precioLimite, precioStop);
+                std::cout << "Orden modificada: id = " << res.orderId << ", estado = " << res.status << std::endl;
                 break;
             }
             case 12: { // Consultar orden
@@ -199,7 +263,7 @@ int main() {
                 std::cout << "Ingrese el id de la orden del cliente: ";
                 std::cin >> idOrden;
                 OrderResult res = api.get_order(idOrden);
-                std::cout << "Orden: id = " << res.id << ", estado = " << res.status << std::endl;
+                std::cout << "Orden: id = " << res.orderId << ", estado = " << res.status << std::endl;
                 break;
             }
             case 13: { // Obtener datos históricos para acciones
@@ -220,6 +284,20 @@ int main() {
                               << ", C = " << barra.close << ", Volumen = " << barra.volume << std::endl;
                 }
                 break;
+            }
+            case 14: {
+                api.reqAllOpenOrders();
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+
+                // Retrieve and print the open orders.
+                auto orders = api.list_orders("", 100, "", "", "asc", "", "");
+                for (const auto& order : orders) {
+                    std::cout << "OrderID: " << order.orderId
+                              << ", OrderRef: " << order.orderRef
+                              << ", Symbol: " << order.symbol
+                              << ", Status: " << order.status
+                              << ", Side: " << order.side << std::endl;
+                }
             }
             case 0:
                 ejecutando = false;

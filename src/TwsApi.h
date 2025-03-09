@@ -16,11 +16,20 @@
 #include "Order.h"
 #include "Decimal.h"
 
-// Simplified wrapper structures for API results
 struct OrderResult {
-    std::string id;
-    std::string status;
+    OrderId orderId = 0;
+    std::string orderRef = "";
+    std::string status = "";
+    std::string symbol = "";
+    std::string side = "";
+    int qty = 0;
+    std::string orderType = "";
+    std::string tif = "";
+    double limit_price = 0.0;
+    double stop_price = 0.0;
+    std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::time_point{};
 };
+
 
 struct Position {
     std::string symbol;
@@ -74,7 +83,7 @@ public:
       const std::string& direction, const std::string& symbols,
       const std::string& side);
 
-    void cancel_order(const std::string& order_id);
+    void cancel_order(OrderId order_id);
 
     // Position functions
     std::vector<Position> list_positions();
@@ -88,15 +97,18 @@ public:
     std::vector<Trade> get_latest_trades_options(const std::string& symbols);
 
     // Order modification and query
-    OrderResult change_order_by_order_id(const std::string& client_order_id,
-      std::optional<int> qty, std::optional<std::string> time_in_force,
-      std::optional<double> limit_price, std::optional<double> stop_price);
+    OrderResult change_order_by_order_id(OrderId order_id,
+    int qty, std::string time_in_force,
+    std::optional<double> limit_price, std::optional<double> stop_price);
 
     OrderResult get_order(const std::string& order_id);
 
     // Historical data (for stocks)
     std::vector<HistoricalBar> get_historical_data_stocks(const std::string& symbol,
       const std::string& start, const std::string& end, int limit);
+
+    // NEW: Request all open orders from TWS.
+    void reqAllOpenOrders();
 
     // --- EWrapper callbacks ---
     virtual void tickPrice( TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override;
@@ -209,7 +221,7 @@ public:
     int m_nextOrderId;
     std::mutex m_mutex;
     std::condition_variable m_cond;
-    std::map<std::string, OrderResult> m_orders;  // Keyed by client_order_id
+    std::map<OrderId, OrderResult> m_orders;  // Keyed by client_order_id
     std::vector<Position> m_positions;
     std::map<TickerId, Quote> m_quotes;
     std::map<TickerId, Trade> m_trades;

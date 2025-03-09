@@ -62,7 +62,6 @@ OrderResult TwsApi::submit_order_stock(const std::string& symbol, int qty, const
 
     if (type == "market" || type == "MKT") {
         order.orderType = "MKT";
-        // For market orders, explicitly clear any price fields.
         order.lmtPrice = 0.0;
         order.auxPrice = 0.0;
     } else if (type == "limit" || type == "LMT") {
@@ -77,36 +76,32 @@ OrderResult TwsApi::submit_order_stock(const std::string& symbol, int qty, const
         order.auxPrice = stop_price;
     }
 
-    // Convert qty to a Decimal using the helper function.
     order.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(qty));
     order.tif = time_in_force;  // e.g. "DAY" or "GTC"
     order.orderRef = client_order_id;
+
+    OrderId orderId;
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        orderId = m_nextOrderId++;
+    }
+    order.orderId = orderId;
 
     std::cout << "Placing order:"
               << "\n  symbol = " << symbol
               << "\n  qty = " << qty
               << "\n  orderType = " << order.orderType
               << "\n  totalQuantity = " << std::to_string(qty)
-              << "\n  tif = " << order.tif << std::endl;
+              << "\n  tif = " << order.tif
+              << "\n  orderId = " << order.orderId << std::endl;
 
-    int orderId;
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        orderId = m_nextOrderId++;
-    }
+
     m_client->placeOrder(orderId, contract, order);
 
-    // Wait until order status is updated.
-    std::unique_lock<std::mutex> lock(m_mutex);
-    bool updated = m_cond.wait_for(lock, std::chrono::milliseconds(500),
-                        [&]{ return m_orders.find(client_order_id) != m_orders.end(); });
     OrderResult result;
-    if (updated)
-        result = m_orders[client_order_id];
-    else {
-        result.id = client_order_id;
+        result.orderId = orderId;
         result.status = "Pending";
-    }
+
     return result;
 }
 
@@ -116,69 +111,155 @@ OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, cons
     double bracket_take_profit_price, double bracket_stop_loss_price)
 {
     Contract contract = createOptionContract(symbol);
-    Order order;
-    order.action = (side == "buy" || side == "BUY") ? "BUY" : "SELL";
+
+    Order parent;
+    parent.action = (side == "buy" || side == "BUY") ? "BUY" : "SELL";
+    parent.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(qty));
+    parent.orderRef = client_order_id;
+    parent.tif = time_in_force;
+    parent.transmit = false; // Do not transmit immediately; wait for children
 
     if(type == "market" || type == "MKT")
-        order.orderType = "MKT";
+        parent.orderType = "MKT";
     else if(type == "limit" || type == "LMT") {
-        order.orderType = "LMT";
-        order.lmtPrice = limit_price;
+        parent.orderType = "LMT";
+        parent.lmtPrice = limit_price;
     } else if(type == "stop" || type == "STP") {
-        order.orderType = "STP";
-        order.auxPrice = stop_price;
+        parent.orderType = "STP";
+        parent.auxPrice = stop_price;
     } else if(type == "stop_limit" || type == "STP LMT") {
-        order.orderType = "STP LMT";
-        order.lmtPrice = limit_price;
-        order.auxPrice = stop_price;
+        parent.orderType = "STP LMT";
+        parent.lmtPrice = limit_price;
+        parent.auxPrice = stop_price;
     }
 
-    order.totalQuantity = qty;
-    order.tif = time_in_force;
-    order.orderRef = client_order_id;
-    // For bracket orders, IB requires multiple legs. This demo does not implement full bracket logic.
+    Order takeProfit;
+    takeProfit.action = (side == "buy" || side == "BUY") ? "SELL" : "BUY";
+    takeProfit.orderType = "LMT";
+    takeProfit.totalQuantity = parent.totalQuantity;
+    takeProfit.lmtPrice = bracket_take_profit_price;
+    takeProfit.parentId = m_nextOrderId;
+    takeProfit.transmit = false;
 
-    int orderId;
+    Order stopLoss;
+    stopLoss.action = (side == "buy" || side == "BUY") ? "SELL" : "BUY";
+    stopLoss.orderType = "STP";
+    stopLoss.auxPrice = bracket_stop_loss_price;
+    stopLoss.totalQuantity = parent.totalQuantity;
+    stopLoss.parentId = m_nextOrderId;
+    stopLoss.transmit = true; // Last child transmits all orders
+
+    OrderId parentOrderId, tpOrderId, slOrderId;
     {
         std::unique_lock<std::mutex> lock(m_mutex);
-        orderId = m_nextOrderId++;
+        parentOrderId = m_nextOrderId++;
+        tpOrderId = m_nextOrderId++;
+        slOrderId = m_nextOrderId++;
     }
-    m_client->placeOrder(orderId, contract, order);
+    parent.orderId = parentOrderId;
+    takeProfit.orderId = tpOrderId;
+    stopLoss.orderId = slOrderId;
+
+    m_client->placeOrder(parentOrderId, contract, parent);
+    m_client->placeOrder(tpOrderId, contract, takeProfit);
+    m_client->placeOrder(slOrderId, contract, stopLoss);
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
     std::unique_lock<std::mutex> lock(m_mutex);
+
     OrderResult result;
-    if(m_orders.find(client_order_id) != m_orders.end())
-        result = m_orders[client_order_id];
+    if(m_orders.find(parent.orderId) != m_orders.end())
+        result = m_orders[parent.orderId];
     else {
-        result.id = client_order_id;
-        result.status = "Pending";
+        result.orderRef = parent.orderId;
+        result.status = "Bracket Pending";
     }
     return result;
 }
 
 std::vector<OrderResult> TwsApi::list_orders(const std::string& /*status*/, int limit,
     const std::string& /*after*/, const std::string& /*until*/,
-    const std::string& /*direction*/, const std::string& /*symbols*/,
-    const std::string& /*side*/)
+    const std::string& direction, const std::string& symbols,
+    const std::string& side)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    std::vector<OrderResult> orders;
-    for(auto& pair : m_orders) {
-        orders.push_back(pair.second);
-        if(orders.size() >= (size_t)limit)
-            break;
+
+    std::vector<OrderResult> filteredOrders;
+
+    // Determine which filters are active
+    // bool filterStatus  = !status.empty();
+    bool filterSymbols = !symbols.empty();
+    bool filterSide    = !side.empty();
+
+    // If symbols filter is provided, split the comma-separated list into a set for quick lookup.
+    std::set<std::string> symbolSet;
+    if (filterSymbols) {
+        std::istringstream symStream(symbols);
+        std::string token;
+        while (std::getline(symStream, token, ',')) {
+            // Trim leading whitespace.
+            token.erase(token.begin(),
+                std::find_if(token.begin(), token.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+            // Trim trailing whitespace.
+            token.erase(std::find_if(token.rbegin(), token.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(),
+                        token.end());
+            if (!token.empty())
+                symbolSet.insert(token);
+        }
     }
-    return orders;
+
+    // Iterate over all stored orders and apply filters.
+    for (const auto& pair : m_orders) {
+        const OrderResult& order = pair.second;
+
+        // // Filter by status if provided.
+        // if (filterStatus && order.status != status)
+        //     continue;
+
+        // Filter by symbols if provided.
+        if (filterSymbols && symbolSet.find(order.symbol) == symbolSet.end())
+            continue;
+
+        // Filter by side if provided.
+        if (filterSide && order.side != side)
+            continue;
+
+        filteredOrders.push_back(order);
+    }
+
+    // Sort the orders by timestamp.
+    if (direction == "desc") {
+        std::sort(filteredOrders.begin(), filteredOrders.end(), [](const OrderResult& a, const OrderResult& b) {
+            return a.timestamp > b.timestamp;
+        });
+    } else { // Default to ascending order.
+        std::sort(filteredOrders.begin(), filteredOrders.end(), [](const OrderResult& a, const OrderResult& b) {
+            return a.timestamp < b.timestamp;
+        });
+    }
+
+    // Limit the number of orders returned.
+    if (limit > 0 && filteredOrders.size() > static_cast<size_t>(limit))
+        filteredOrders.resize(limit);
+
+    return filteredOrders;
 }
 
-void TwsApi::cancel_order(const std::string& order_id) {
-    int ibOrderId = std::stoi(order_id);
-    OrderCancel orderCancel; // Create a default cancellation request
-    m_client->cancelOrder(ibOrderId, orderCancel);
+void TwsApi::reqAllOpenOrders()
+{
+    if (m_client) {
+        m_client->reqAllOpenOrders();
+    } else {
+        std::cerr << "error at reqAllOpenOrders" << std::endl;
+    }
+}
+// Callback invoked when TWS signals the end of open orders.
+void TwsApi::openOrderEnd(){}
+
+void TwsApi::cancel_order(OrderId order_id) {
+    OrderCancel orderCancel;
+    m_client->cancelOrder(order_id, orderCancel);
     std::unique_lock<std::mutex> lock(m_mutex);
-    if(m_orders.find(order_id) != m_orders.end())
-        m_orders[order_id].status = "Cancelled";
 }
 
 // --- Position Functions ---
@@ -196,7 +277,7 @@ Position TwsApi::get_position(const std::string& symbol) {
         if(pos.symbol == symbol)
             return pos;
     }
-    return Position{"", 0, 0.0};
+    std::cerr << "error at get_position: " << symbol << " not found" <<  std::endl;
 }
 
 // --- Market Data Functions ---
@@ -308,28 +389,87 @@ std::vector<Trade> TwsApi::get_latest_trades_options(const std::string& symbols)
 
 // --- Order Modification and Query ---
 
-OrderResult TwsApi::change_order_by_order_id(const std::string& client_order_id,
-    std::optional<int> qty, std::optional<std::string> time_in_force,
+OrderResult TwsApi::change_order_by_order_id(OrderId order_id,
+    int qty, std::string time_in_force,
     std::optional<double> limit_price, std::optional<double> stop_price)
 {
-    OrderResult existing = get_order(client_order_id);
-    cancel_order(client_order_id);
-    // In a full implementation you would save all order parameters.
-    // Here we simply re-submit a new (dummy) order.
-    std::string symbol = "UNKNOWN";  // Replace with the stored symbol
-    int newQty = qty.value_or(0);
-    std::string newTif = time_in_force.value_or("DAY");
-    double newLimit = limit_price.value_or(0.0);
-    double newStop = stop_price.value_or(0.0);
-    OrderResult modified = submit_order_stock(symbol, newQty, "buy", "limit", newTif, newLimit, newStop, client_order_id);
-    return modified;
+    // Lock and lookup the original order.
+    std::unique_lock<std::mutex> lock(m_mutex);
+    auto it = m_orders.find(order_id);
+    if (it == m_orders.end()) {
+        OrderResult res;
+        res.orderId = order_id;
+        res.status = "OrderNotFound";
+        return res;
+    }
+    OrderResult orig = it->second;
+    lock.unlock();
+
+    // Determine new values:
+    // If qty is nonzero, update; otherwise, retain original.
+    int new_qty = (qty != 0) ? qty : orig.qty;
+    // If time_in_force is not "-" then update; otherwise, retain original.
+    std::string new_tif = (time_in_force != "-") ? time_in_force : orig.tif;
+    // For prices, if provided and nonzero then update; else keep original.
+    double new_limit = (limit_price.has_value() && limit_price.value() != 0.0)
+                          ? limit_price.value()
+                          : orig.limit_price;
+    double new_stop = (stop_price.has_value() && stop_price.value() != 0.0)
+                         ? stop_price.value()
+                         : orig.stop_price;
+
+    // Determine new order type.
+    std::string new_orderType;
+    if (new_limit != 0.0 && new_stop != 0.0)
+        new_orderType = "STP LMT";
+    else if (new_limit != 0.0)
+        new_orderType = "LMT";
+    else if (new_stop != 0.0)
+        new_orderType = "STP";
+    else
+        new_orderType = orig.orderType; // No price changes, so retain original type.
+
+    // Recreate the stock contract using the original symbol.
+    Contract contract = createStockContract(orig.symbol);
+
+    // Build the new Order object for modification.
+    Order order;
+    order.orderId = order_id;
+    order.action = orig.side; // Retain original side ("BUY" or "SELL")
+    // Convert quantity to the appropriate decimal format.
+    order.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(new_qty));
+    order.tif = new_tif;
+    order.orderType = new_orderType;
+    order.lmtPrice = new_limit;
+    order.auxPrice = new_stop;
+    order.orderRef = orig.orderRef; // Retain the original order reference.
+
+    // Send the modified order to TWS.
+    m_client->placeOrder(order_id, contract, order);
+
+    // Build the new OrderResult.
+    OrderResult newResult = orig;
+    newResult.qty = new_qty;
+    newResult.tif = new_tif;
+    newResult.limit_price = new_limit;
+    newResult.stop_price = new_stop;
+    newResult.orderType = new_orderType;
+    newResult.timestamp = std::chrono::system_clock::now();
+    newResult.status = "Modified";  // You may update this later after a callback confirms the change.
+
+    // Update the stored order.
+    lock.lock();
+    m_orders[order_id] = newResult;
+    lock.unlock();
+
+    return newResult;
 }
 
+
 OrderResult TwsApi::get_order(const std::string& order_id) {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    if(m_orders.find(order_id) != m_orders.end())
-        return m_orders[order_id];
-    return OrderResult{order_id, "NotFound"};
+    // std::unique_lock<std::mutex> mutexlock(m_mutex);
+    // if(m_orders.find(order_id) != m_orders.end())
+    //     return m_orders[order_id];
 }
 
 // --- Historical Data ---
@@ -415,24 +555,31 @@ void TwsApi::tickPrice(TickerId tickerId, TickType field, double price, const Ti
 void TwsApi::orderStatus(OrderId orderId, const std::string& status, Decimal /*filled*/,
     Decimal /*remaining*/, double /*avgFillPrice*/, long long /*permId*/, int /*parentId*/,
     double /*lastFillPrice*/, int /*clientId*/, const std::string& /*whyHeld*/, double /*mktCapPrice*/) {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    std::string client_order_id = std::to_string(orderId);
-    OrderResult result;
-    result.id = client_order_id;
-    result.status = status;
-    m_orders[client_order_id] = result;
-    // Signal that order status is updated.
-    m_cond.notify_all();
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    // std::string client_order_id = std::to_string(orderId);
+    // OrderResult result;
+    // result.status = status;
+    // result.orderId = orderId;
+    // m_orders[orderId] = result;
+    // std::cout << "dentro de orderStatus" << std::endl;
+    // m_cond.notify_all();
 }
 
 
-void TwsApi::openOrder(OrderId orderId, const Contract& /*contract*/, const Order& order, const OrderState& orderState) {
+void TwsApi::openOrder(OrderId orderId, const Contract& contract, const Order& order, const OrderState& orderState) {
     std::unique_lock<std::mutex> lock(m_mutex);
-    std::string client_order_id = order.orderRef;
     OrderResult result;
-    result.id = client_order_id;
+    result.orderId = orderId;
+    result.orderRef = order.orderRef;
     result.status = orderState.status;
-    m_orders[client_order_id] = result;
+    result.symbol = contract.symbol;
+    result.side = order.action;
+    result.qty = order.totalQuantity;
+    result.orderType = order.orderType;
+    result.limit_price = order.lmtPrice;
+    result.stop_price = order.auxPrice;
+    result.tif = order.tif;
+    m_orders[order.orderId] = result;
 }
 
 void TwsApi::historicalData(TickerId reqId, const Bar& bar) {
@@ -550,6 +697,5 @@ void TwsApi::wshEventData(int, const std::string&) { }
 void TwsApi::historicalSchedule(int, const std::string&, const std::string&, const std::string&, const std::vector<HistoricalSession>&) { }
 void TwsApi::userInfo(int, const std::string&) { }
 void TwsApi::currentTimeInMillis(time_t) { }
-void TwsApi::openOrderEnd() {
     // Empty implementation for now.
-}
+
