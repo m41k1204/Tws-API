@@ -1,8 +1,8 @@
-# Interactive Brokers TWS API Project 🌐⚙️📈
+# Interactive Brokers TWS API Project
 
-This project provides a comprehensive guide for interacting with the Interactive Brokers TWS API using C++. The system leverages TCP/IP protocols and socket communication to interface with the TWS client, ensuring efficient and real-time data handling. 🚀💡🔧
+This project provides a comprehensive guide for interacting with the Interactive Brokers TWS API using C++. The system leverages TCP/IP protocols and socket communication to interface with the TWS client, ensuring efficient and real-time data handling.
 
-## Key Features 🎯📊📚
+## Key Features
 
 - Establishes robust TCP/IP connections to the TWS client using socket programming.
 - Facilitates the submission and management of stock and option orders.
@@ -10,7 +10,7 @@ This project provides a comprehensive guide for interacting with the Interactive
 - Manages financial positions and account details.
 - Utilizes asynchronous message processing to optimize data handling and system performance.
 
-## Prerequisites ⚒️🔍💻
+## Prerequisites
 
 To build and run this project, ensure the following are installed:
 
@@ -19,7 +19,7 @@ To build and run this project, ensure the following are installed:
 - Interactive Brokers TWS or IB Gateway.
 - The Interactive Brokers TWS API C++ SDK.
 
-## Installation Guide 🧩🚀🔄
+## Installation Guide
 
 ### 1. **Install TWS or IB Gateway**
 Download and install either the Trader Workstation (TWS) or the IB Gateway from the following links:
@@ -77,7 +77,7 @@ make
 ./TwsApiApp
 ```
 
-## Functionality Overview 🔍📂⚙️
+## Functionality Overview
 
 ### 1. **Connecting to TWS**
 - **Method:** `bool connect(const std::string& host, int port, int clientId);`
@@ -107,20 +107,20 @@ make
 - **Method:** `std::vector<HistoricalBar> get_historical_data_stocks(...);`
 - **Purpose:** Requests historical market data for a specific stock within a defined timeframe.
 
-## TCP/IP Communication 🌐📡🔄
+## TCP/IP Communication
 
-The core of this project relies on TCP/IP communication established via the `EClientSocket` from the TWS API. This ensures seamless real-time data transmission and transaction processing between the application and TWS. 💬⚡🔒
+The core of this project relies on TCP/IP communication established via the `EClientSocket` from the TWS API. This ensures seamless real-time data transmission and transaction processing between the application and TWS.
 
-## Asynchronous Message Processing 🔄⚙️🛠️
+## Asynchronous Message Processing
 
 - The system employs `EReaderOSSignal` to facilitate efficient and asynchronous message handling.
 - Thread safety is maintained through the use of mutexes and condition variables, ensuring consistent data integrity during concurrent operations.
 
-## Contribution Guidelines 🤝📬💡
+## Contribution Guidelines
 
-Contributions are welcome! If you wish to propose a significant change, kindly open an issue first to discuss your ideas. Pull requests should adhere to the existing coding conventions and be well-documented. ✅📝🔍
+Contributions are welcome! If you wish to propose a significant change, kindly open an issue first to discuss your ideas. Pull requests should adhere to the existing coding conventions and be well-documented.
 
-## License Information 📜🔒✅
+## License Information
 
-This project is licensed under the MIT License. For more details, refer to the LICENSE file. 📄🔍📚
+This project is licensed under the MIT License. For more details, refer to the LICENSE file.
 
