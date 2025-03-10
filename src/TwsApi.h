@@ -41,6 +41,7 @@ struct Quote {
     std::string symbol;
     double bid_price;
     double ask_price;
+    time_t timestamp;
 };
 
 struct Trade {
@@ -90,18 +91,17 @@ public:
     Position get_position(const std::string& symbol);
 
     // Market data (quotes and trades)
-    std::vector<Quote> get_latest_quotes_stocks(const std::string& symbols, const std::string& currency);
-    std::vector<Quote> get_latest_quotes_options(const std::string& symbols);
+    std::vector<Quote> get_latest_stock_quotes(const std::string& symbols);
+    std::vector<Trade> get_latest_stock_trades(const std::string& symbols);
 
-    std::vector<Trade> get_latest_trades_stocks(const std::string& symbols, const std::string& currency);
-    std::vector<Trade> get_latest_trades_options(const std::string& symbols);
+    std::vector<Trade> get_latest_option_trades(const std::string& symbols);
+    std::vector<Quote> get_latest_option_quotes(const std::string& symbols);
 
     // Order modification and query
     OrderResult change_order_by_order_id(OrderId order_id,
     int qty, std::string time_in_force,
     std::optional<double> limit_price, std::optional<double> stop_price);
 
-    OrderResult get_order(const std::string& order_id);
 
     // Historical data (for stocks)
     std::vector<HistoricalBar> get_historical_data_stocks(const std::string& symbol,
@@ -111,6 +111,22 @@ public:
     void reqAllOpenOrders();
 
     // --- EWrapper callbacks ---
+
+    // void reqTickByTickData(int tickerId, const Contract& contract,
+    //                        const std::string& tickType, int numberOfTicks, bool ignoreSize);
+    void cancelTickByTickData(int tickerId);
+
+
+    virtual void tickByTickAllLast(int reqId, int tickType, time_t time, double price,
+                                   Decimal size, const TickAttribLast& tickAttribLast,
+                                   const std::string& exchange, const std::string& specialConditions) override;
+
+    // For quotes:
+    virtual void tickByTickBidAsk(int reqId, long time, double bidPrice, double askPrice,
+                                  int bidSize, int askSize,
+                                  const std::string& tickAttribBidAsk);
+
+
     virtual void tickPrice( TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override;
     virtual void tickSize(TickerId tickerId, TickType field, Decimal size) override;
     virtual void tickOptionComputation( TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta,
@@ -202,7 +218,6 @@ public:
     virtual void historicalTicks(int reqId, const std::vector<HistoricalTick> &ticks, bool done) override;
     virtual void historicalTicksBidAsk(int reqId, const std::vector<HistoricalTickBidAsk> &ticks, bool done) override;
     virtual void historicalTicksLast(int reqId, const std::vector<HistoricalTickLast> &ticks, bool done) override;
-    virtual void tickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttribLast, const std::string& exchange, const std::string& specialConditions) override;
     virtual void tickByTickBidAsk(int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttribBidAsk) override;
     virtual void tickByTickMidPoint(int reqId, time_t time, double midPoint) override;
     virtual void orderBound(long long permId, int clientId, int orderId) override;
@@ -227,6 +242,12 @@ public:
     std::map<TickerId, Trade> m_trades;
     std::map<int, std::vector<HistoricalBar>> m_historicalData;  // Keyed by request id
     std::unordered_map<int, std::string> m_reqIdToSymbol;
+    std::map<int, std::string> m_tickerIdToSymbol;
+
+    int m_nextTickerId = 1000; // Starting ticker id (can be any number)
+    std::mutex m_tickMutex;
+    std::vector<Trade> m_latestTrades;
+    std::vector<Quote> m_latestQuotes;
 
     // Helper functions to build IB contracts
     Contract createStockContract(const std::string& symbol);

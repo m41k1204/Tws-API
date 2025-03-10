@@ -60,8 +60,7 @@ int main() {
         std::cout << "9: Obtener trades de acciones" << std::endl;
         std::cout << "10: Obtener trades de opciones" << std::endl;
         std::cout << "11: Modificar orden" << std::endl;
-        std::cout << "12: Consultar orden" << std::endl;
-        std::cout << "13: Obtener datos históricos para acciones" << std::endl;
+        std::cout << "12: Obtener datos históricos para acciones" << std::endl;
         std::cout << "0: Salir" << std::endl;
         std::cout << "Ingrese una opción: ";
 
@@ -198,12 +197,10 @@ int main() {
                 break;
             }
             case 7: { // Obtener cotizaciones de acciones
-                std::string simbolos, moneda;
+                std::string simbolos;
                 std::cout << "Ingrese los símbolos de las acciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::cout << "Ingrese la moneda (ej.: USD): ";
-                std::cin >> moneda;
-                std::vector<Quote> cotizaciones = api.get_latest_quotes_stocks(simbolos, moneda);
+                std::vector<Quote> cotizaciones = api.get_latest_stock_quotes(simbolos);
                 for (const auto& cotizacion : cotizaciones)
                     std::cout << "Cotización para " << cotizacion.symbol << ": Bid = " << cotizacion.bid_price << ", Ask = " << cotizacion.ask_price << std::endl;
                 break;
@@ -212,16 +209,16 @@ int main() {
                 std::string simbolos;
                 std::cout << "Ingrese los símbolos de las opciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Quote> cotizaciones = api.get_latest_quotes_options(simbolos);
+                std::vector<Quote> cotizaciones = api.get_latest_option_quotes(simbolos);
                 for (const auto& cotizacion : cotizaciones)
                     std::cout << "Cotización de opción para " << cotizacion.symbol << ": Bid = " << cotizacion.bid_price << ", Ask = " << cotizacion.ask_price << std::endl;
                 break;
             }
             case 9: { // Obtener trades de acciones
-                std::string simbolos, moneda;
+                std::string simbolos;
                 std::cout << "Ingrese los símbolos de las acciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Trade> trades = api.get_latest_trades_stocks(simbolos, "");
+                std::vector<Trade> trades = api.get_latest_stock_trades(simbolos);
                 for (const auto& trade : trades)
                     std::cout << "Trade para " << trade.symbol << ": Precio = " << trade.trade_price << std::endl;
                 break;
@@ -230,12 +227,13 @@ int main() {
                 std::string simbolos;
                 std::cout << "Ingrese los símbolos de las opciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Trade> trades = api.get_latest_trades_options(simbolos);
+                std::vector<Trade> trades = api.get_latest_option_trades(simbolos);
                 for (const auto& trade : trades)
                     std::cout << "Trade de opción para " << trade.symbol << ": Precio = " << trade.trade_price << std::endl;
                 break;
             }
-            case 11: { // Modificar orden
+            case 11: {
+                // Modificar orden
                 OrderId order_id;
                 std::string  tif;
                 int cantidad;
@@ -258,15 +256,8 @@ int main() {
                 std::cout << "Orden modificada: id = " << res.orderId << ", estado = " << res.status << std::endl;
                 break;
             }
-            case 12: { // Consultar orden
-                std::string idOrden;
-                std::cout << "Ingrese el id de la orden del cliente: ";
-                std::cin >> idOrden;
-                OrderResult res = api.get_order(idOrden);
-                std::cout << "Orden: id = " << res.orderId << ", estado = " << res.status << std::endl;
-                break;
-            }
-            case 13: { // Obtener datos históricos para acciones
+            case 12: {
+                // Obtener datos históricos para acciones
                 std::string simbolo, inicio, fin;
                 int limite;
                 std::cout << "Ingrese el símbolo de la acción: ";
@@ -284,20 +275,6 @@ int main() {
                               << ", C = " << barra.close << ", Volumen = " << barra.volume << std::endl;
                 }
                 break;
-            }
-            case 14: {
-                api.reqAllOpenOrders();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-
-                // Retrieve and print the open orders.
-                auto orders = api.list_orders("", 100, "", "", "asc", "", "");
-                for (const auto& order : orders) {
-                    std::cout << "OrderID: " << order.orderId
-                              << ", OrderRef: " << order.orderRef
-                              << ", Symbol: " << order.symbol
-                              << ", Status: " << order.status
-                              << ", Side: " << order.side << std::endl;
-                }
             }
             case 0:
                 ejecutando = false;

@@ -8,6 +8,24 @@
 #include "OrderState.h"     // Include OrderState definition.
 #include "Decimal.h"
 
+static std::vector<std::string> splitSymbols(const std::string& symbols) {
+    std::vector<std::string> result;
+    std::istringstream ss(symbols);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        // Remove leading/trailing whitespace.
+        token.erase(token.begin(), std::find_if(token.begin(), token.end(),
+                         [](unsigned char ch) { return !std::isspace(ch); }));
+        token.erase(std::find_if(token.rbegin(), token.rend(),
+                         [](unsigned char ch) { return !std::isspace(ch); }).base(),
+                         token.end());
+        if (!token.empty()) {
+            result.push_back(token);
+        }
+    }
+    return result;
+}
+
 // Constructor: create the EClientSocket instance and initialize the order counter.
 TwsApi::TwsApi() : m_client(nullptr), m_signal(nullptr), m_nextOrderId(0) {
     m_signal = new EReaderOSSignal(1000);  // Create a signal with a 1000 ms timeout
@@ -248,6 +266,7 @@ std::vector<OrderResult> TwsApi::list_orders(const std::string& /*status*/, int 
 void TwsApi::reqAllOpenOrders()
 {
     if (m_client) {
+        m_orders.clear();
         m_client->reqAllOpenOrders();
     } else {
         std::cerr << "error at reqAllOpenOrders" << std::endl;
@@ -278,113 +297,6 @@ Position TwsApi::get_position(const std::string& symbol) {
             return pos;
     }
     std::cerr << "error at get_position: " << symbol << " not found" <<  std::endl;
-}
-
-// --- Market Data Functions ---
-
-std::vector<Quote> TwsApi::get_latest_quotes_stocks(const std::string& symbols, const std::string& /*currency*/) {
-    std::vector<Quote> quotes;
-    std::istringstream ss(symbols);
-    std::string token;
-    while(std::getline(ss, token, ',')) {
-        Contract contract = createStockContract(token);
-        int tickerId = std::hash<std::string>{}(token) % 10000;
-        m_client->reqMktData(tickerId, contract, "", false, false, nullptr);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if(m_quotes.find(tickerId) != m_quotes.end())
-            quotes.push_back(m_quotes[tickerId]);
-    }
-    return quotes;
-}
-
-std::vector<Quote> TwsApi::get_latest_quotes_options(const std::string& symbols) {
-    std::vector<Quote> quotes;
-    std::istringstream ss(symbols);
-    std::string token;
-    while(std::getline(ss, token, ',')) {
-        Contract contract = createOptionContract(token);
-        int tickerId = std::hash<std::string>{}(token) % 10000;
-        m_client->reqMktData(tickerId, contract, "", false, false, nullptr);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if(m_quotes.find(tickerId) != m_quotes.end())
-            quotes.push_back(m_quotes[tickerId]);
-    }
-    return quotes;
-}
-
-std::vector<Trade> TwsApi::get_latest_trades_stocks(const std::string& symbols, const std::string& /*currency*/) {
-    std::vector<Trade> trades;
-    std::istringstream ss(symbols);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        Contract contract = createStockContract(token);
-        // Generate a unique tickerId for this symbol.
-        int tickerId = (std::hash<std::string>{}(token) % 10000) + 10000;
-
-        // Store the mapping from tickerId to symbol.
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            m_reqIdToSymbol[tickerId] = token;
-        }
-
-        // Request tick-by-tick data for the last trade.
-        m_client->reqTickByTickData(tickerId, contract, "Last", 0, false);
-
-        // Wait briefly until the tick callback updates m_trades.
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            // Wait up to 100 milliseconds or until trade data appears.
-            m_cond.wait_for(lock, std::chrono::milliseconds(100),
-                              [&]{ return m_trades.find(tickerId) != m_trades.end(); });
-        }
-
-        // Retrieve the trade if available.
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            if (m_trades.find(tickerId) != m_trades.end()) {
-                Trade trade = m_trades[tickerId];
-                // If trade.symbol is still empty, fill it from the mapping.
-                if (trade.symbol.empty())
-                    trade.symbol = m_reqIdToSymbol[tickerId];
-                trades.push_back(trade);
-            } else {
-                std::cerr << "No trade data received for symbol " << token
-                          << " (tickerId: " << tickerId << ")" << std::endl;
-            }
-        }
-    }
-    return trades;
-}
-
-void TwsApi::tickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size,
-                               const TickAttribLast& tickAttribLast, const std::string& exchange,
-                               const std::string& specialConditions) {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    Trade trade;
-    auto it = m_reqIdToSymbol.find(reqId);
-    trade.symbol = (it != m_reqIdToSymbol.end()) ? it->second : "Unknown";
-    trade.trade_price = price;
-    trade.timestamp = time;
-    m_trades[reqId] = trade;
-    m_cond.notify_all();
-}
-
-std::vector<Trade> TwsApi::get_latest_trades_options(const std::string& symbols) {
-    std::vector<Trade> trades;
-    std::istringstream ss(symbols);
-    std::string token;
-    while(std::getline(ss, token, ',')) {
-        Contract contract = createOptionContract(token);
-        int tickerId = (std::hash<std::string>{}(token) % 10000) + 10000;
-        m_client->reqMktData(tickerId, contract, "", false, false, nullptr);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if(m_trades.find(tickerId) != m_trades.end())
-            trades.push_back(m_trades[tickerId]);
-    }
-    return trades;
 }
 
 // --- Order Modification and Query ---
@@ -465,13 +377,6 @@ OrderResult TwsApi::change_order_by_order_id(OrderId order_id,
     return newResult;
 }
 
-
-OrderResult TwsApi::get_order(const std::string& order_id) {
-    // std::unique_lock<std::mutex> mutexlock(m_mutex);
-    // if(m_orders.find(order_id) != m_orders.end())
-    //     return m_orders[order_id];
-}
-
 // --- Historical Data ---
 
 std::vector<HistoricalBar> TwsApi::get_historical_data_stocks(const std::string& symbol,
@@ -498,6 +403,139 @@ std::vector<HistoricalBar> TwsApi::get_historical_data_stocks(const std::string&
     return bars;
 }
 
+// Convenience function to get latest trades for one or more symbols.
+std::vector<Trade> TwsApi::get_latest_stock_trades(const std::string& symbols) {
+    std::vector<std::string> symbolList = splitSymbols(symbols);
+    std::vector<int> tickerIds;
+
+    // Subscribe to tick-by-tick trade data ("Last") for each symbol.
+    for (const auto& sym : symbolList) {
+        Contract contract = createStockContract(sym);
+        int tickerId = m_nextTickerId++;
+        m_tickerIdToSymbol[tickerId] = sym;
+        // "Last" returns individual trade ticks.
+        m_client-> reqTickByTickData(tickerId, contract, "Last", 0, false);
+        tickerIds.push_back(tickerId);
+    }
+
+    // Wait for a short period (e.g., 2 seconds) to collect ticks.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // Cancel subscriptions for these tickerIds.
+    for (int id : tickerIds) {
+        cancelTickByTickData(id);
+    }
+
+    // Copy collected trades.
+    std::vector<Trade> trades;
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        trades = m_latestTrades;
+        m_latestTrades.clear();
+    }
+    return trades;
+}
+
+// Convenience function to get latest quotes for one or more symbols.
+std::vector<Quote> TwsApi::get_latest_stock_quotes(const std::string& symbols) {
+    std::vector<std::string> symbolList = splitSymbols(symbols);
+    std::vector<int> tickerIds;
+
+    // Subscribe to tick-by-tick quote data ("BidAsk") for each symbol.
+    for (const auto& sym : symbolList) {
+        Contract contract = createStockContract(sym);
+        int tickerId = m_nextTickerId++;
+        m_tickerIdToSymbol[tickerId] = sym;
+        // "BidAsk" returns bid and ask updates.
+        m_client-> reqTickByTickData(tickerId, contract, "BidAsk", 0, false);
+        tickerIds.push_back(tickerId);
+    }
+
+    // Wait for a short period (e.g., 2 seconds) to collect ticks.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // Cancel subscriptions.
+    for (int id : tickerIds) {
+        cancelTickByTickData(id);
+    }
+
+    // Copy collected quotes.
+    std::vector<Quote> quotes;
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        quotes = m_latestQuotes;
+        m_latestQuotes.clear();
+    }
+    return quotes;
+}
+
+// Convenience function to get latest trades for one or more option symbols.
+std::vector<Trade> TwsApi::get_latest_option_trades(const std::string& symbols) {
+    std::vector<std::string> symbolList = splitSymbols(symbols);
+    std::vector<int> tickerIds;
+
+    // Subscribe to tick-by-tick trade data ("Last") for each option symbol.
+    for (const auto& sym : symbolList) {
+        Contract contract = createOptionContract(sym);
+        int tickerId = m_nextTickerId++;
+        m_tickerIdToSymbol[tickerId] = sym;
+        // "Last" returns individual trade ticks.
+        m_client-> reqTickByTickData(tickerId, contract, "Last", 0, false);
+        tickerIds.push_back(tickerId);
+    }
+
+    // Wait for a short period (e.g., 1 second) to collect ticks.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // Cancel subscriptions for these tickerIds.
+    for (int id : tickerIds) {
+        cancelTickByTickData(id);
+    }
+
+    // Copy collected trades.
+    std::vector<Trade> trades;
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        trades = m_latestTrades;
+        m_latestTrades.clear();
+    }
+    return trades;
+}
+
+// Convenience function to get latest quotes for one or more option symbols.
+std::vector<Quote> TwsApi::get_latest_option_quotes(const std::string& symbols) {
+    std::vector<std::string> symbolList = splitSymbols(symbols);
+    std::vector<int> tickerIds;
+
+    // Subscribe to tick-by-tick quote data ("BidAsk") for each option symbol.
+    for (const auto& sym : symbolList) {
+        Contract contract = createOptionContract(sym);
+        int tickerId = m_nextTickerId++;
+        m_tickerIdToSymbol[tickerId] = sym;
+        // "BidAsk" returns bid and ask updates.
+        m_client-> reqTickByTickData(tickerId, contract, "BidAsk", 0, false);
+        tickerIds.push_back(tickerId);
+    }
+
+    // Wait for a short period (e.g., 1 second) to collect ticks.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // Cancel subscriptions.
+    for (int id : tickerIds) {
+        cancelTickByTickData(id);
+    }
+
+    // Copy collected quotes.
+    std::vector<Quote> quotes;
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        quotes = m_latestQuotes;
+        m_latestQuotes.clear();
+    }
+    return quotes;
+}
+
+
 // --- Helper Functions to Create Contracts ---
 
 Contract TwsApi::createStockContract(const std::string& symbol) {
@@ -523,6 +561,8 @@ Contract TwsApi::createOptionContract(const std::string& symbol) {
     return contract;
 }
 
+
+
 // --- EWrapper Callback Implementations ---
 
 void TwsApi::nextValidId(OrderId orderId) {
@@ -530,6 +570,46 @@ void TwsApi::nextValidId(OrderId orderId) {
     m_nextOrderId = orderId;
     m_cond.notify_all();
 }
+
+// Callback for tick-by-tick trade ticks ("Last").
+void TwsApi::tickByTickAllLast(int reqId, int tickType, time_t time, double price,
+                               Decimal size, const TickAttribLast& tickAttribLast,
+                               const std::string& exchange, const std::string& specialConditions) {
+    Trade trade;
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        auto it = m_tickerIdToSymbol.find(reqId);
+        trade.symbol = (it != m_tickerIdToSymbol.end()) ? it->second : "UNKNOWN";
+        trade.trade_price = price;
+        trade.timestamp = time;  // Assuming time_t is already in seconds.
+        // You might want to do something with tickType, size, and tickAttribLast if needed.
+        m_latestTrades.push_back(trade);
+    }
+}
+
+// Callback for tick-by-tick bid/ask ticks ("BidAsk").
+void TwsApi::tickByTickBidAsk(int reqId, long time, double bidPrice, double askPrice,
+                              int bidSize, int askSize,
+                              const std::string& tickAttribBidAsk) {
+    Quote quote;
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        auto it = m_tickerIdToSymbol.find(reqId);
+        quote.symbol = (it != m_tickerIdToSymbol.end()) ? it->second : "UNKNOWN";
+        quote.bid_price = bidPrice;
+        quote.ask_price = askPrice;
+        quote.timestamp = static_cast<time_t>(time);
+        m_latestQuotes.push_back(quote);
+    }
+}
+
+// Example implementation of cancelTickByTickData (you need to call the underlying client).
+void TwsApi::cancelTickByTickData(int tickerId) {
+    if (m_client) {
+        m_client->cancelTickByTickData(tickerId);
+    }
+}
+
 
 void TwsApi::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& /*attrib*/) {
     std::unique_lock<std::mutex> lock(m_mutex);
