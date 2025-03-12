@@ -27,6 +27,7 @@ struct OrderResult {
     std::string tif = "";
     double limit_price = 0.0;
     double stop_price = 0.0;
+    std::string assetType = "";
     std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::time_point{};
 };
 
@@ -41,6 +42,8 @@ struct Quote {
     std::string symbol;
     double bid_price;
     double ask_price;
+    double last_price;
+    double close_price;
     time_t timestamp;
 };
 
@@ -71,13 +74,14 @@ public:
 
     // Order functions (stocks and options)
     OrderResult submit_order_stock(const std::string& symbol, int qty, const std::string& side,
-      const std::string& type, const std::string& time_in_force,
-      double limit_price, double stop_price, const std::string& client_order_id);
+    const std::string& type, const std::string& time_in_force,
+    double limit_price, double stop_price, const std::string& client_order_id,
+    double bracket_take_profit_price, double bracket_stop_loss_price, bool is_bracket);
 
     OrderResult submit_order_option(const std::string& symbol, int qty, const std::string& side,
-      const std::string& type, const std::string& time_in_force,
-      double limit_price, double stop_price, const std::string& client_order_id,
-      double bracket_take_profit_price = 0.0, double bracket_stop_loss_price = 0.0);
+    const std::string& type, const std::string& time_in_force,
+    double limit_price, double stop_price, const std::string& client_order_id,
+    double bracket_take_profit_price, double bracket_stop_loss_price, bool is_bracket);
 
     std::vector<OrderResult> list_orders(const std::string& status, int limit,
       const std::string& after, const std::string& until,
@@ -102,6 +106,8 @@ public:
     int qty, std::string time_in_force,
     std::optional<double> limit_price, std::optional<double> stop_price);
 
+    void requestMarketData(const std::string& symbol);
+    void cancelMarketData(int tickerId);
 
     // Historical data (for stocks)
     std::vector<HistoricalBar> get_historical_data_stocks(const std::string& symbol,
@@ -127,7 +133,7 @@ public:
                                   const std::string& tickAttribBidAsk);
 
 
-    virtual void tickPrice( TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override;
+    virtual void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override;
     virtual void tickSize(TickerId tickerId, TickType field, Decimal size) override;
     virtual void tickOptionComputation( TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta,
         double optPrice, double pvDividend, double gamma, double vega, double theta, double undPrice) override;

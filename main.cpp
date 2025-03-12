@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <thread>
 
 
 // int main()
@@ -61,6 +62,7 @@ int main() {
         std::cout << "10: Obtener trades de opciones" << std::endl;
         std::cout << "11: Modificar orden" << std::endl;
         std::cout << "12: Obtener datos históricos para acciones" << std::endl;
+        std::cout << "13: Recibir data del mercado" << std::endl;
         std::cout << "0: Salir" << std::endl;
         std::cout << "Ingrese una opción: ";
 
@@ -69,9 +71,52 @@ int main() {
 
         switch (opcion) {
             case 1: { // Enviar orden de acciones
+            std::string simbolo, lado, tipo, tif, idOrdenCliente;
+            int cantidad;
+            double precioLimite, precioStop, precioTakeProfit, precioStopLoss;
+            char esBracket;
+
+            std::cout << "Ingrese el símbolo de la acción: ";
+            std::cin >> simbolo;
+            std::cout << "Ingrese la cantidad: ";
+            std::cin >> cantidad;
+            std::cout << "Ingrese el lado (buy/sell): ";
+            std::cin >> lado;
+            std::cout << "Ingrese el tipo de orden (market/limit/stop/stop_limit): ";
+            std::cin >> tipo;
+            std::cout << "Ingrese el tiempo en vigor (DAY/GTC): ";
+            std::cin >> tif;
+            std::cout << "Ingrese el precio límite (0 si no aplica): ";
+            std::cin >> precioLimite;
+            std::cout << "Ingrese el precio stop (0 si no aplica): ";
+            std::cin >> precioStop;
+            std::cout << "Ingrese el id de orden asignado por el cliente: ";
+            std::cin >> idOrdenCliente;
+            std::cout << "¿Es una orden bracket? (S/N): ";
+            std::cin >> esBracket;
+
+            bool is_bracket = (esBracket == 'S' || esBracket == 's');
+
+            if (is_bracket) {
+                std::cout << "Ingrese el precio de take profit: ";
+                std::cin >> precioTakeProfit;
+                std::cout << "Ingrese el precio de stop loss: ";
+                std::cin >> precioStopLoss;
+            }
+
+            OrderResult resultado = api.submit_order_stock(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop,
+                                                      idOrdenCliente, precioTakeProfit, precioStopLoss, is_bracket);
+
+            std::cout << "Orden de acciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
+            break;
+        }
+
+        case 2: { // Enviar orden de opciones
                 std::string simbolo, lado, tipo, tif, idOrdenCliente;
                 int cantidad;
-                double precioLimite, precioStop;
+                double precioLimite, precioStop, precioTakeProfit, precioStopLoss;
+                char esBracket;
+
                 std::cout << "Ingrese el símbolo de la acción: ";
                 std::cin >> simbolo;
                 std::cout << "Ingrese la cantidad: ";
@@ -84,44 +129,28 @@ int main() {
                 std::cin >> tif;
                 std::cout << "Ingrese el precio límite (0 si no aplica): ";
                 std::cin >> precioLimite;
-                std::cout << "Ingrese el precio de stop (0 si no aplica): ";
+                std::cout << "Ingrese el precio stop (0 si no aplica): ";
                 std::cin >> precioStop;
                 std::cout << "Ingrese el id de orden asignado por el cliente: ";
                 std::cin >> idOrdenCliente;
+                std::cout << "¿Es una orden bracket? (S/N): ";
+                std::cin >> esBracket;
 
-                OrderResult resultado = api.submit_order_stock(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop, idOrdenCliente);
-                std::cout << "Orden de acciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
-                break;
-            }
-            case 2: { // Enviar orden de opciones
-                std::string simbolo, lado, tipo, tif, idOrdenCliente;
-                int cantidad;
-                double precioLimite, precioStop, takeProfit, stopLoss;
-                std::cout << "Ingrese el símbolo de la opción: ";
-                std::cin >> simbolo;
-                std::cout << "Ingrese la cantidad: ";
-                std::cin >> cantidad;
-                std::cout << "Ingrese el lado (buy/sell): ";
-                std::cin >> lado;
-                std::cout << "Ingrese el tipo de orden (market/limit/stop/stop_limit): ";
-                std::cin >> tipo;
-                std::cout << "Ingrese el tiempo en vigor (DAY/GTC): ";
-                std::cin >> tif;
-                std::cout << "Ingrese el precio límite (0 si no aplica): ";
-                std::cin >> precioLimite;
-                std::cout << "Ingrese el precio de stop (0 si no aplica): ";
-                std::cin >> precioStop;
-                std::cout << "Ingrese el id de orden asignado por el cliente: ";
-                std::cin >> idOrdenCliente;
-                std::cout << "Ingrese el precio de take profit (0 si no aplica): ";
-                std::cin >> takeProfit;
-                std::cout << "Ingrese el precio de stop loss (0 si no aplica): ";
-                std::cin >> stopLoss;
+                bool is_bracket = (esBracket == 'S' || esBracket == 's');
 
-                OrderResult resultado = api.submit_order_option(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop, idOrdenCliente, takeProfit, stopLoss);
-                std::cout << "Orden de opciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
-                break;
-            }
+                if (is_bracket) {
+                    std::cout << "Ingrese el precio de take profit: ";
+                    std::cin >> precioTakeProfit;
+                    std::cout << "Ingrese el precio de stop loss: ";
+                    std::cin >> precioStopLoss;
+                }
+
+            OrderResult resultado = api.submit_order_option(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop,
+                                                            idOrdenCliente, precioTakeProfit, precioStopLoss, is_bracket);
+
+            std::cout << "Orden de opciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
+            break;
+}
             case 3: { // Listar órdenes
                 std::string estado, despues, hasta, direccion, simbolos, filtroLado;
                 int limite;
@@ -146,7 +175,7 @@ int main() {
                 std::cout << std::left
                           << std::setw(10) << "OrderID"
                           << std::setw(15) << "OrderRef"
-                          << std::setw(10) << "Symbol"
+                          << std::setw(22) << "Symbol"
                           << std::setw(15) << "Status"
                           << std::setw(10) << "Side"
                           << std::setw(10) << "Quantity"
@@ -162,7 +191,7 @@ int main() {
                     std::cout << std::left
                               << std::setw(10) << order.orderId
                               << std::setw(15) << order.orderRef
-                              << std::setw(10) << order.symbol
+                              << std::setw(22) << order.symbol
                               << std::setw(15) << order.status
                               << std::setw(12) << order.side
                               << std::setw(10) << order.qty
@@ -274,6 +303,24 @@ int main() {
                               << ", H = " << barra.high << ", L = " << barra.low
                               << ", C = " << barra.close << ", Volumen = " << barra.volume << std::endl;
                 }
+                break;
+            }
+            case 13: { // Request market data
+                std::string symbol;
+                std::cout << "Enter the symbol to request market data for: ";
+                std::cin >> symbol;
+                api.requestMarketData(symbol);
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+
+                // Display latest quote for this symbol
+                for (const auto& [tickerId, quote] : api.m_quotes) {
+                    if (quote.symbol == symbol) {
+                        std::cout << "Market Data for " << symbol << ": Bid = " << quote.bid_price
+                                  << ", Ask = " << quote.ask_price << ", Last = " << quote.last_price
+                                  << ", Close = " << quote.close_price << std::endl;
+                    }
+                }
+                api.cancelMarketData(api.m_nextTickerId - 1);
                 break;
             }
             case 0:

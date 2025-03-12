@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <functional>
+
 #include "EReader.h"        // Include full definition of EReader.
 #include "OrderState.h"     // Include OrderState definition.
 #include "Decimal.h"
@@ -24,6 +25,12 @@ static std::vector<std::string> splitSymbols(const std::string& symbols) {
         }
     }
     return result;
+}
+
+static std::string removeSpaces(const std::string& input) {
+    std::string output = input;
+    output.erase(std::remove(output.begin(), output.end(), ' '), output.end());
+    return output;
 }
 
 // Constructor: create the EClientSocket instance and initialize the order counter.
@@ -72,62 +79,92 @@ void TwsApi::disconnect() {
 
 OrderResult TwsApi::submit_order_stock(const std::string& symbol, int qty, const std::string& side,
     const std::string& type, const std::string& time_in_force,
-    double limit_price, double stop_price, const std::string& client_order_id)
+    double limit_price, double stop_price, const std::string& client_order_id,
+    double bracket_take_profit_price, double bracket_stop_loss_price, bool is_bracket)
 {
     Contract contract = createStockContract(symbol);
-    Order order;
-    order.action = (side == "buy" || side == "BUY") ? "BUY" : "SELL";
+
+    Order parent;
+    parent.action = (side == "buy" || side == "BUY") ? "BUY" : "SELL";
+    parent.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(qty));
+    parent.orderRef = client_order_id;
+    parent.tif = time_in_force;
+    parent.transmit = !is_bracket;
 
     if (type == "market" || type == "MKT") {
-        order.orderType = "MKT";
-        order.lmtPrice = 0.0;
-        order.auxPrice = 0.0;
+        parent.orderType = "MKT";
     } else if (type == "limit" || type == "LMT") {
-        order.orderType = "LMT";
-        order.lmtPrice = limit_price;
+        parent.orderType = "LMT";
+        parent.lmtPrice = limit_price;
     } else if (type == "stop" || type == "STP") {
-        order.orderType = "STP";
-        order.auxPrice = stop_price;
+        parent.orderType = "STP";
+        parent.auxPrice = stop_price;
     } else if (type == "stop_limit" || type == "STP LMT") {
-        order.orderType = "STP LMT";
-        order.lmtPrice = limit_price;
-        order.auxPrice = stop_price;
+        parent.orderType = "STP LMT";
+        parent.lmtPrice = limit_price;
+        parent.auxPrice = stop_price;
     }
 
-    order.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(qty));
-    order.tif = time_in_force;  // e.g. "DAY" or "GTC"
-    order.orderRef = client_order_id;
-
-    OrderId orderId;
+    OrderId parentOrderId, tpOrderId, slOrderId;
     {
         std::unique_lock<std::mutex> lock(m_mutex);
-        orderId = m_nextOrderId++;
+        parentOrderId = m_nextOrderId++;
     }
-    order.orderId = orderId;
+    parent.orderId = parentOrderId;
 
-    std::cout << "Placing order:"
-              << "\n  symbol = " << symbol
-              << "\n  qty = " << qty
-              << "\n  orderType = " << order.orderType
-              << "\n  totalQuantity = " << std::to_string(qty)
-              << "\n  tif = " << order.tif
-              << "\n  orderId = " << order.orderId << std::endl;
+    m_client->placeOrder(parentOrderId, contract, parent);
 
+    if (is_bracket) {
+        Order takeProfit;
+        takeProfit.action = (side == "buy" || side == "BUY") ? "SELL" : "BUY";
+        takeProfit.orderType = "LMT";
+        takeProfit.totalQuantity = parent.totalQuantity;
+        takeProfit.lmtPrice = bracket_take_profit_price;
+        takeProfit.parentId = parentOrderId;
+        takeProfit.transmit = false;
 
-    m_client->placeOrder(orderId, contract, order);
+        Order stopLoss;
+        stopLoss.action = takeProfit.action;
+        stopLoss.orderType = "STP";
+        stopLoss.auxPrice = bracket_stop_loss_price;
+        stopLoss.totalQuantity = parent.totalQuantity;
+        stopLoss.parentId = parentOrderId;
+        stopLoss.transmit = true;
+
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            tpOrderId = m_nextOrderId++;
+            slOrderId = m_nextOrderId++;
+        }
+
+        m_client->placeOrder(tpOrderId, contract, takeProfit);
+        m_client->placeOrder(slOrderId, contract, stopLoss);
+
+        parent.transmit = false;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        parentOrderId = m_nextOrderId++;
+    }
+    parent.orderId = parentOrderId;
+    parent.orderRef = client_order_id;
+    parent.transmit = !is_bracket;
 
     OrderResult result;
-        result.orderId = orderId;
-        result.status = "Pending";
+    result.orderId = parent.orderId;
+    result.status = is_bracket ? "Bracket Pending" : "Pending";
 
     return result;
 }
 
+
 OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, const std::string& side,
     const std::string& type, const std::string& time_in_force,
     double limit_price, double stop_price, const std::string& client_order_id,
-    double bracket_take_profit_price, double bracket_stop_loss_price)
+    double bracket_take_profit_price, double bracket_stop_loss_price, bool is_bracket)
 {
+
     Contract contract = createOptionContract(symbol);
 
     Order parent;
@@ -135,65 +172,71 @@ OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, cons
     parent.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(qty));
     parent.orderRef = client_order_id;
     parent.tif = time_in_force;
-    parent.transmit = false; // Do not transmit immediately; wait for children
+    parent.transmit = !is_bracket;
 
-    if(type == "market" || type == "MKT")
+    if (type == "market" || type == "MKT") {
         parent.orderType = "MKT";
-    else if(type == "limit" || type == "LMT") {
+    } else if (type == "limit" || type == "LMT") {
         parent.orderType = "LMT";
         parent.lmtPrice = limit_price;
-    } else if(type == "stop" || type == "STP") {
+    } else if (type == "stop" || type == "STP") {
         parent.orderType = "STP";
         parent.auxPrice = stop_price;
-    } else if(type == "stop_limit" || type == "STP LMT") {
+    } else if (type == "stop_limit" || type == "STP LMT") {
         parent.orderType = "STP LMT";
         parent.lmtPrice = limit_price;
         parent.auxPrice = stop_price;
     }
 
-    Order takeProfit;
-    takeProfit.action = (side == "buy" || side == "BUY") ? "SELL" : "BUY";
-    takeProfit.orderType = "LMT";
-    takeProfit.totalQuantity = parent.totalQuantity;
-    takeProfit.lmtPrice = bracket_take_profit_price;
-    takeProfit.parentId = m_nextOrderId;
-    takeProfit.transmit = false;
-
-    Order stopLoss;
-    stopLoss.action = (side == "buy" || side == "BUY") ? "SELL" : "BUY";
-    stopLoss.orderType = "STP";
-    stopLoss.auxPrice = bracket_stop_loss_price;
-    stopLoss.totalQuantity = parent.totalQuantity;
-    stopLoss.parentId = m_nextOrderId;
-    stopLoss.transmit = true; // Last child transmits all orders
-
     OrderId parentOrderId, tpOrderId, slOrderId;
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         parentOrderId = m_nextOrderId++;
-        tpOrderId = m_nextOrderId++;
-        slOrderId = m_nextOrderId++;
     }
-    parent.orderId = parentOrderId;
-    takeProfit.orderId = tpOrderId;
-    stopLoss.orderId = slOrderId;
 
     m_client->placeOrder(parentOrderId, contract, parent);
-    m_client->placeOrder(tpOrderId, contract, takeProfit);
-    m_client->placeOrder(slOrderId, contract, stopLoss);
+
+    if (is_bracket) {
+        Order takeProfit;
+        takeProfit.action = (side == "buy" || side == "BUY") ? "SELL" : "BUY";
+        takeProfit.orderType = "LMT";
+        takeProfit.totalQuantity = parent.totalQuantity;
+        takeProfit.lmtPrice = bracket_take_profit_price;
+        takeProfit.parentId = parentOrderId;
+        takeProfit.transmit = false;
+
+        Order stopLoss;
+        stopLoss.action = takeProfit.action;
+        stopLoss.orderType = "STP";
+        stopLoss.auxPrice = bracket_stop_loss_price;
+        stopLoss.totalQuantity = parent.totalQuantity;
+        stopLoss.parentId = parentOrderId;
+        stopLoss.transmit = true;
+
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            tpOrderId = m_nextOrderId++;
+            slOrderId = m_nextOrderId++;
+        }
+
+        m_client->placeOrder(tpOrderId, contract, takeProfit);
+        m_client->placeOrder(slOrderId, contract, stopLoss);
+    }
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
     std::unique_lock<std::mutex> lock(m_mutex);
 
     OrderResult result;
-    if(m_orders.find(parent.orderId) != m_orders.end())
+    if(m_orders.find(parentOrderId) != m_orders.end())
         result = m_orders[parent.orderId];
     else {
-        result.orderRef = parent.orderId;
-        result.status = "Bracket Pending";
+        result.orderId = parent.orderId;
+        result.status = is_bracket ? "Bracket Pending" : "Pending";
     }
+
     return result;
 }
+
 
 std::vector<OrderResult> TwsApi::list_orders(const std::string& /*status*/, int limit,
     const std::string& /*after*/, const std::string& /*until*/,
@@ -204,12 +247,9 @@ std::vector<OrderResult> TwsApi::list_orders(const std::string& /*status*/, int 
 
     std::vector<OrderResult> filteredOrders;
 
-    // Determine which filters are active
-    // bool filterStatus  = !status.empty();
     bool filterSymbols = !symbols.empty();
     bool filterSide    = !side.empty();
 
-    // If symbols filter is provided, split the comma-separated list into a set for quick lookup.
     std::set<std::string> symbolSet;
     if (filterSymbols) {
         std::istringstream symStream(symbols);
@@ -230,22 +270,15 @@ std::vector<OrderResult> TwsApi::list_orders(const std::string& /*status*/, int 
     for (const auto& pair : m_orders) {
         const OrderResult& order = pair.second;
 
-        // // Filter by status if provided.
-        // if (filterStatus && order.status != status)
-        //     continue;
-
-        // Filter by symbols if provided.
         if (filterSymbols && symbolSet.find(order.symbol) == symbolSet.end())
             continue;
 
-        // Filter by side if provided.
         if (filterSide && order.side != side)
             continue;
 
         filteredOrders.push_back(order);
     }
 
-    // Sort the orders by timestamp.
     if (direction == "desc") {
         std::sort(filteredOrders.begin(), filteredOrders.end(), [](const OrderResult& a, const OrderResult& b) {
             return a.timestamp > b.timestamp;
@@ -284,6 +317,7 @@ void TwsApi::cancel_order(OrderId order_id) {
 // --- Position Functions ---
 
 std::vector<Position> TwsApi::list_positions() {
+    m_positions.clear();
     m_client->reqPositions();
     std::this_thread::sleep_for(std::chrono::seconds(1));
     std::unique_lock<std::mutex> lock(m_mutex);
@@ -314,67 +348,57 @@ OrderResult TwsApi::change_order_by_order_id(OrderId order_id,
         res.status = "OrderNotFound";
         return res;
     }
+
     OrderResult orig = it->second;
-    lock.unlock();
 
-    // Determine new values:
-    // If qty is nonzero, update; otherwise, retain original.
-    int new_qty = (qty != 0) ? qty : orig.qty;
-    // If time_in_force is not "-" then update; otherwise, retain original.
-    std::string new_tif = (time_in_force != "-") ? time_in_force : orig.tif;
-    // For prices, if provided and nonzero then update; else keep original.
-    double new_limit = (limit_price.has_value() && limit_price.value() != 0.0)
-                          ? limit_price.value()
-                          : orig.limit_price;
-    double new_stop = (stop_price.has_value() && stop_price.value() != 0.0)
-                         ? stop_price.value()
-                         : orig.stop_price;
+    // Make sure parent/child relationships are respected when modifying bracket orders.
+    Order parentOrder;
+    parentOrder.orderId = order_id;
+    parentOrder.action = orig.side;
+    parentOrder.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string((qty != 0) ? qty : orig.qty));
+    parentOrder.tif = (time_in_force != "-") ? time_in_force : orig.tif;
 
-    // Determine new order type.
-    std::string new_orderType;
-    if (new_limit != 0.0 && new_stop != 0.0)
-        new_orderType = "STP LMT";
-    else if (new_limit != 0.0)
-        new_orderType = "LMT";
-    else if (new_stop != 0.0)
-        new_orderType = "STP";
+    // Update only specified fields, retain original if not provided.
+    parentOrder.lmtPrice = limit_price.value_or(orig.limit_price);
+    parentOrder.auxPrice = stop_price.value_or(orig.stop_price);
+
+    if (parentOrder.lmtPrice != 0.0 && parentOrder.auxPrice != 0.0)
+        parentOrder.orderType = "STP LMT";
+    else if (parentOrder.lmtPrice != 0.0)
+        parentOrder.orderType = "LMT";
+    else if (parentOrder.auxPrice != 0.0)
+        parentOrder.orderType = "STP";
     else
-        new_orderType = orig.orderType; // No price changes, so retain original type.
+        parentOrder.orderType = orig.orderType;
 
-    // Recreate the stock contract using the original symbol.
-    Contract contract = createStockContract(orig.symbol);
+    parentOrder.tif = parentOrder.tif.empty() ? orig.tif : time_in_force;
+    parentOrder.orderRef = orig.orderRef;
 
-    // Build the new Order object for modification.
-    Order order;
-    order.orderId = order_id;
-    order.action = orig.side; // Retain original side ("BUY" or "SELL")
-    // Convert quantity to the appropriate decimal format.
-    order.totalQuantity = DecimalFunctions::stringToDecimal(std::to_string(new_qty));
-    order.tif = new_tif;
-    order.orderType = new_orderType;
-    order.lmtPrice = new_limit;
-    order.auxPrice = new_stop;
-    order.orderRef = orig.orderRef; // Retain the original order reference.
+    // Recreate the appropriate contract based on the original order's asset type.
+    Contract contract;
+    if(orig.assetType == "OPT")
+        contract = createOptionContract(orig.symbol);
+    else
+        contract = createStockContract(orig.symbol);
 
-    // Send the modified order to TWS.
-    m_client->placeOrder(order_id, contract, order);
+    // Explicitly set the transmit flag.
+    parentOrder.transmit = true;
 
-    // Build the new OrderResult.
-    OrderResult newResult = orig;
-    newResult.qty = new_qty;
-    newResult.tif = new_tif;
-    newResult.limit_price = new_limit;
-    newResult.stop_price = new_stop;
-    newResult.orderType = new_orderType;
-    newResult.timestamp = std::chrono::system_clock::now();
-    newResult.status = "Modified";  // You may update this later after a callback confirms the change.
+    // Modify the order in TWS.
+    m_client->placeOrder(order_id, contract, parentOrder);
 
-    // Update the stored order.
-    lock.lock();
-    m_orders[order_id] = newResult;
-    lock.unlock();
+    // Update local record to reflect modification.
+    orig.qty = parentOrder.totalQuantity;
+    orig.tif = parentOrder.tif;
+    orig.limit_price = parentOrder.lmtPrice;
+    orig.stop_price = parentOrder.auxPrice;
+    orig.orderType = parentOrder.orderType;
+    orig.timestamp = std::chrono::system_clock::now();
+    orig.status = "Modified";
 
-    return newResult;
+    m_orders[order_id] = orig;
+
+    return orig;
 }
 
 // --- Historical Data ---
@@ -418,7 +442,6 @@ std::vector<Trade> TwsApi::get_latest_stock_trades(const std::string& symbols) {
         tickerIds.push_back(tickerId);
     }
 
-    // Wait for a short period (e.g., 2 seconds) to collect ticks.
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
     // Cancel subscriptions for these tickerIds.
@@ -548,16 +571,40 @@ Contract TwsApi::createStockContract(const std::string& symbol) {
 }
 
 Contract TwsApi::createOptionContract(const std::string& symbol) {
+    size_t pos = 0;
+    while (pos < symbol.size() && std::isalpha(symbol[pos])) {
+        ++pos;
+    }
+    if (pos == 0 || symbol.size() < pos + 6 + 1 + 8) {
+        throw std::invalid_argument("Symbol format is invalid");
+    }
+
+    std::string ticker = symbol.substr(0, pos);
+    std::string dateStr = symbol.substr(pos, 6);
+    char rightChar = symbol[pos + 6];
+    std::string strikeStr = symbol.substr(pos + 6 + 1, 8);
+
+    std::string right;
+    if (rightChar == 'C') {
+        right = "CALL";
+    } else if (rightChar == 'P') {
+        right = "PUT";
+    } else {
+        throw std::invalid_argument("Symbol format is invalid: invalid option type");
+    }
+
+    double strike = std::stod(strikeStr) / 1000.0;
+
     Contract contract;
-    contract.symbol = symbol;
+    contract.symbol = ticker;
+    contract.lastTradeDateOrContractMonth = "20" + dateStr;
+    contract.strike = strike;
+    contract.right = right;
     contract.secType = "OPT";
     contract.exchange = "SMART";
     contract.currency = "USD";
-    // In a real implementation, you would specify the expiry, strike, right, etc.
-    contract.lastTradeDateOrContractMonth = "20241220";
-    contract.strike = 100.0;
-    contract.right = "C";
     contract.multiplier = "100";
+
     return contract;
 }
 
@@ -611,24 +658,23 @@ void TwsApi::cancelTickByTickData(int tickerId) {
 }
 
 
-void TwsApi::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& /*attrib*/) {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    if(field == LAST) {
-        Trade trade;
-        trade.symbol = "";  // In a complete implementation, map tickerId to symbol.
-        trade.trade_price = price;
-        m_trades[tickerId] = trade;
-    }
-    if(field == BID) {
-        Quote q;
-        q.symbol = "";
-        q.bid_price = price;
-        m_quotes[tickerId] = q;
-    } else if(field == ASK) {
-        Quote q;
-        q.symbol = "";
-        q.ask_price = price;
-        m_quotes[tickerId] = q;
+void TwsApi::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) {
+    std::lock_guard<std::mutex> lock(m_tickMutex);
+    auto symbolIt = m_tickerIdToSymbol.find(tickerId);
+    if (symbolIt != m_tickerIdToSymbol.end()) {
+        std::string symbol = symbolIt->second;
+        Quote& quote = m_quotes[tickerId];
+        quote.symbol = symbol;
+        quote.timestamp = std::time(nullptr);
+
+        if (field == BID)
+            quote.bid_price = price;
+        else if (field == ASK)
+            quote.ask_price = price;
+        else if (field == LAST)
+            quote.last_price = price;
+        else if (field == CLOSE)
+            quote.close_price = price;
     }
 }
 
@@ -650,9 +696,13 @@ void TwsApi::openOrder(OrderId orderId, const Contract& contract, const Order& o
     std::unique_lock<std::mutex> lock(m_mutex);
     OrderResult result;
     result.orderId = orderId;
+    result.assetType = contract.secType;
     result.orderRef = order.orderRef;
     result.status = orderState.status;
-    result.symbol = contract.symbol;
+    if (contract.secType == "OPT") {
+        result.symbol = removeSpaces(contract.localSymbol);
+    }
+    else result.symbol = contract.symbol;
     result.side = order.action;
     result.qty = order.totalQuantity;
     result.orderType = order.orderType;
@@ -679,6 +729,19 @@ void TwsApi::historicalDataEnd(int /*reqId*/, const std::string& /*startDateStr*
     m_cond.notify_all();
 }
 
+
+void TwsApi::requestMarketData(const std::string& symbol) {
+    Contract contract = createStockContract(symbol);
+    int tickerId = m_nextTickerId++;
+    m_tickerIdToSymbol[tickerId] = symbol;
+    m_client->reqMktData(tickerId, contract, "", false, false, TagValueListSPtr());
+}
+
+void TwsApi::cancelMarketData(int tickerId) {
+    m_client->cancelMktData(tickerId);
+}
+
+
 // --- Other callbacks are left with empty implementations or basic logging ---
 
 void TwsApi::tickSize(TickerId, TickType, Decimal) { }
@@ -698,12 +761,12 @@ void TwsApi::contractDetailsEnd(int) { }
 void TwsApi::execDetails(int, const Contract&, const Execution&) { }
 void TwsApi::execDetailsEnd(int) { }
 void TwsApi::error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    // ANSI escape code for green text: "\033[32m"
-    // Reset code: "\033[0m"
-    std::cerr << "\033[32mError (id " << id << ") at " << std::ctime(&errorTime)
-              << "Code: " << errorCode << " - " << errorString << "\033[0m" << std::endl;
-    m_cond.notify_all();
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    // // ANSI escape code for green text: "\033[32m"
+    // // Reset code: "\033[0m"
+    // std::cerr << "\033[32mError (id " << id << ") at " << std::ctime(&errorTime)
+    //           << "Code: " << errorCode << " - " << errorString << "\033[0m" << std::endl;
+    // m_cond.notify_all();
 }
 void TwsApi::updateMktDepth(TickerId, int, int, int, double, Decimal) { }
 void TwsApi::updateMktDepthL2(TickerId, int, const std::string&, int, int, double, Decimal, bool) { }
@@ -723,7 +786,8 @@ void TwsApi::marketDataType(TickerId, int) { }
 void TwsApi::commissionAndFeesReport(const CommissionAndFeesReport&) { }
 void TwsApi::position(const std::string& /*account*/, const Contract& contract, Decimal position, double avgCost) {
     Position pos;
-    pos.symbol = contract.symbol;
+    if (contract.secType == "STK") pos.symbol = contract.symbol;
+    else pos.symbol = contract.localSymbol;
     pos.qty = static_cast<int>(position);
     pos.avgCost = avgCost;
     m_positions.push_back(pos);
