@@ -223,7 +223,7 @@ OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, cons
         m_client->placeOrder(slOrderId, contract, stopLoss);
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::unique_lock<std::mutex> lock(m_mutex);
 
     OrderResult result;
@@ -319,7 +319,7 @@ void TwsApi::cancel_order(OrderId order_id) {
 std::vector<Position> TwsApi::list_positions() {
     m_positions.clear();
     m_client->reqPositions();
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::unique_lock<std::mutex> lock(m_mutex);
     return m_positions;
 }
@@ -416,7 +416,7 @@ std::vector<HistoricalBar> TwsApi::get_historical_data_stocks(const std::string&
     int useRTH = 1;
     int formatDate = 1;
     m_client->reqHistoricalData(reqId, contract, endDateTime, durationStr, barSizeSetting, whatToShow, useRTH, formatDate, false, TagValueListSPtr());
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     std::unique_lock<std::mutex> lock(m_mutex);
     std::vector<HistoricalBar> bars;
     if(m_historicalData.find(reqId) != m_historicalData.end()) {
@@ -424,6 +424,7 @@ std::vector<HistoricalBar> TwsApi::get_historical_data_stocks(const std::string&
         if(bars.size() > (size_t)limit)
             bars.resize(limit);
     }
+
     return bars;
 }
 
@@ -442,7 +443,7 @@ std::vector<Trade> TwsApi::get_latest_stock_trades(const std::string& symbols) {
         tickerIds.push_back(tickerId);
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Cancel subscriptions for these tickerIds.
     for (int id : tickerIds) {
@@ -475,7 +476,7 @@ std::vector<Quote> TwsApi::get_latest_stock_quotes(const std::string& symbols) {
     }
 
     // Wait for a short period (e.g., 2 seconds) to collect ticks.
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Cancel subscriptions.
     for (int id : tickerIds) {
@@ -508,7 +509,7 @@ std::vector<Trade> TwsApi::get_latest_option_trades(const std::string& symbols) 
     }
 
     // Wait for a short period (e.g., 1 second) to collect ticks.
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Cancel subscriptions for these tickerIds.
     for (int id : tickerIds) {
@@ -541,7 +542,7 @@ std::vector<Quote> TwsApi::get_latest_option_quotes(const std::string& symbols) 
     }
 
     // Wait for a short period (e.g., 1 second) to collect ticks.
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Cancel subscriptions.
     for (int id : tickerIds) {
@@ -787,7 +788,7 @@ void TwsApi::commissionAndFeesReport(const CommissionAndFeesReport&) { }
 void TwsApi::position(const std::string& /*account*/, const Contract& contract, Decimal position, double avgCost) {
     Position pos;
     if (contract.secType == "STK") pos.symbol = contract.symbol;
-    else pos.symbol = contract.localSymbol;
+    else pos.symbol = removeSpaces(contract.localSymbol);
     pos.qty = static_cast<int>(position);
     pos.avgCost = avgCost;
     m_positions.push_back(pos);
