@@ -1,6 +1,6 @@
 # Interactive Brokers TWS API Project
 
-This project provides a comprehensive guide for interacting with the Interactive Brokers TWS API using C++. The system leverages TCP/IP protocols and socket communication to interface with the TWS client, ensuring efficient and real-time data handling.
+This readme provides a comprehensive guide for interacting with the Interactive Brokers TWS API using C++. The system leverages TCP/IP protocols and socket communication to interface with the TWS client, ensuring efficient and real-time data handling.
 
 ## Key Features
 
