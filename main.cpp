@@ -6,35 +6,6 @@
 #include <vector>
 #include <thread>
 
-
-// int main()
-// {
-//     TwsApi api;
-//
-//     // Connect to TWS.
-//     api.connect("127.0.0.1", 7497, 0);
-//
-//     // Request all open orders.
-//     api.reqAllOpenOrders();
-//     std::this_thread::sleep_for(std::chrono::seconds(1));
-//
-//     // Retrieve and print the open orders.
-//     auto orders = api.list_orders("", 100, "", "", "asc", "", "");
-//     for (const auto& order : orders) {
-//         std::cout << "OrderID: " << order.orderId
-//                   << ", OrderRef: " << order.orderRef
-//                   << ", Symbol: " << order.symbol
-//                   << ", Status: " << order.status
-//                   << ", Side: " << order.side << std::endl;
-//     }
-//
-//     // Disconnect from TWS.
-//     api.disconnect();
-//
-//     return 0;
-// }
-
-
 int main() {
     TwsApi api;
 
@@ -56,10 +27,10 @@ int main() {
         std::cout << "4: Cancelar orden" << std::endl;
         std::cout << "5: Listar posiciones" << std::endl;
         std::cout << "6: Obtener posición para un símbolo" << std::endl;
-        std::cout << "7: Obtener cotizaciones de acciones" << std::endl;
-        std::cout << "8: Obtener cotizaciones de opciones" << std::endl;
-        std::cout << "9: Obtener trades de acciones" << std::endl;
-        std::cout << "10: Obtener trades de opciones" << std::endl;
+        std::cout << "7: Subscribir cotizaciones de acciones" << std::endl;
+        std::cout << "8: Subscribir cotizaciones de opciones" << std::endl;
+        std::cout << "9: Subscribir trades de acciones" << std::endl;
+        std::cout << "10: Subscribir trades de opciones" << std::endl;
         std::cout << "11: Modificar orden" << std::endl;
         std::cout << "12: Obtener datos históricos para acciones" << std::endl;
         std::cout << "13: Recibir data del mercado" << std::endl;
@@ -229,37 +200,25 @@ int main() {
                 std::string simbolos;
                 std::cout << "Ingrese los símbolos de las acciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Quote> cotizaciones = api.get_latest_stock_quotes(simbolos);
-                for (const auto& cotizacion : cotizaciones)
-                    std::cout << "Cotización para " << cotizacion.symbol << ": Bid = " << cotizacion.bid_price << ", Ask = " << cotizacion.ask_price << std::endl;
-                break;
+                api.subscribe_stock_quotes(simbolos);
             }
             case 8: { // Obtener cotizaciones de opciones
                 std::string simbolos;
                 std::cout << "Ingrese los símbolos de las opciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Quote> cotizaciones = api.get_latest_option_quotes(simbolos);
-                for (const auto& cotizacion : cotizaciones)
-                    std::cout << "Cotización de opción para " << cotizacion.symbol << ": Bid = " << cotizacion.bid_price << ", Ask = " << cotizacion.ask_price << std::endl;
-                break;
+                api.subscribe_option_quotes(simbolos);
             }
             case 9: { // Obtener trades de acciones
                 std::string simbolos;
                 std::cout << "Ingrese los símbolos de las acciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Trade> trades = api.get_latest_stock_trades(simbolos);
-                for (const auto& trade : trades)
-                    std::cout << "Trade para " << trade.symbol << ": Precio = " << trade.trade_price << std::endl;
-                break;
+                api.subscribe_stock_trades(simbolos);
             }
             case 10: { // Obtener trades de opciones
                 std::string simbolos;
                 std::cout << "Ingrese los símbolos de las opciones (separados por comas): ";
                 std::cin >> simbolos;
-                std::vector<Trade> trades = api.get_latest_option_trades(simbolos);
-                for (const auto& trade : trades)
-                    std::cout << "Trade de opción para " << trade.symbol << ": Precio = " << trade.trade_price << std::endl;
-                break;
+                api.subscribe_option_trades(simbolos);
             }
             case 11: {
                 // Modificar orden
@@ -307,15 +266,15 @@ int main() {
             }
             case 13: { // Request market data
                 std::string symbol;
-                std::cout << "Enter the symbol to request market data for: ";
+                std::cout << "Ingrese el simbolo: ";
                 std::cin >> symbol;
                 api.requestMarketData(symbol);
-                std::this_thread::sleep_for(std::chrono::seconds(2));
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
                 // Display latest quote for this symbol
                 for (const auto& [tickerId, quote] : api.m_quotes) {
                     if (quote.symbol == symbol) {
-                        std::cout << "Market Data for " << symbol << ": Bid = " << quote.bid_price
+                        std::cout << "Data: " << symbol << ": Bid = " << quote.bid_price
                                   << ", Ask = " << quote.ask_price << ", Last = " << quote.last_price
                                   << ", Close = " << quote.close_price << std::endl;
                     }
@@ -323,6 +282,37 @@ int main() {
                 api.cancelMarketData(api.m_nextTickerId - 1);
                 break;
             }
+            case 14: {
+                std::string inputSimbolos;
+                int segundos;
+                std::cout << "Ingrese los símbolos (separados por comas): ";
+                std::cin >> inputSimbolos;
+                std::cout << "Ingrese el intervalo de tiempo en segundos: ";
+                std::cin >> segundos;
+
+                std::vector<Trade> tradesRecientes = api.filterTradesForLastSeconds(inputSimbolos, segundos);
+                std::cout << "Número de trades recientes: " << tradesRecientes.size() << std::endl;
+                for (const auto& t : tradesRecientes) {
+                    TwsApi::printTradeInline(t);
+                }
+                break;
+            }
+            case 15: {
+                std::string inputSimbolos;
+                int segundos;
+                std::cout << "Ingrese los símbolos (separados por comas): ";
+                std::cin >> inputSimbolos;
+                std::cout << "Ingrese el intervalo de tiempo en segundos: ";
+                std::cin >> segundos;
+
+                std::vector<Quote> quotesRecientes = api.filterQuotesForLastSeconds(inputSimbolos, segundos);
+                std::cout << "Número de cotizaciones recientes: " << quotesRecientes.size() << std::endl;
+                for (const auto& q : quotesRecientes) {
+                    TwsApi::printQuoteInline(q);
+                }
+                break;
+            }
+
             case 0:
                 ejecutando = false;
                 break;

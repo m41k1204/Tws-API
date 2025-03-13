@@ -8,6 +8,9 @@
 #include <condition_variable>
 #include <optional>
 #include <unordered_map>
+#include <ctime>  // for time()
+#include <iostream>
+
 
 #include "EWrapper.h"
 #include "EClientSocket.h"
@@ -42,15 +45,19 @@ struct Quote {
     std::string symbol;
     double bid_price;
     double ask_price;
+    int bidSize;
+    int askSize;
+    long timestamp;
     double last_price;
     double close_price;
-    time_t timestamp;
 };
 
 struct Trade {
     std::string symbol;
     double trade_price;
     time_t timestamp;  // Timestamp of the trade
+    int size;
+    int tickType;
 };
 
 
@@ -90,16 +97,42 @@ public:
 
     void cancel_order(OrderId order_id);
 
+    std::vector<Trade> filterTradesForLastSeconds(const std::string& symbols, int seconds);
+    std::vector<Quote> filterQuotesForLastSeconds(const std::string& symbols, int seconds);
+
+    static void printQuoteInline(const Quote& q) {
+        std::cout << "Quote: "
+                  << "symbol=" << q.symbol << ", "
+                  << "bid_price=" << q.bid_price << ", "
+                  << "ask_price=" << q.ask_price << ", "
+                  << "bidSize=" << q.bidSize << ", "
+                  << "askSize=" << q.askSize << ", "
+                  << "timestamp=" << q.timestamp << ", "
+                  << "last_price=" << q.last_price << ", "
+                  << "close_price=" << q.close_price
+                  << std::endl;
+    }
+
+    // Función para imprimir un Trade en una sola línea
+    static void printTradeInline(const Trade& t) {
+        std::cout << "Trade: "
+                  << "symbol=" << t.symbol << ", "
+                  << "trade_price=" << t.trade_price << ", "
+                  << "timestamp=" << t.timestamp << ", "
+                  << "size=" << t.size << ", "
+                  << "tickType=" << t.tickType
+                  << std::endl;
+    }
     // Position functions
     std::vector<Position> list_positions();
     Position get_position(const std::string& symbol);
 
     // Market data (quotes and trades)
-    std::vector<Quote> get_latest_stock_quotes(const std::string& symbols);
-    std::vector<Trade> get_latest_stock_trades(const std::string& symbols);
+    void subscribe_stock_quotes(const std::string& symbols);
+    void subscribe_stock_trades(const std::string& symbols);
 
-    std::vector<Trade> get_latest_option_trades(const std::string& symbols);
-    std::vector<Quote> get_latest_option_quotes(const std::string& symbols);
+    void subscribe_option_trades(const std::string& symbols);
+    void subscribe_option_quotes(const std::string& symbols);
 
     // Order modification and query
     OrderResult change_order_by_order_id(OrderId order_id,
