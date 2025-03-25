@@ -17,4 +17,31 @@ Decimal DecimalFunctions::stringToDecimal(std::string str) {
     return dec;
 }
 
+std::string DecimalFunctions::decimalToString(Decimal value) {
+    char buf[64];  // Assuming 64 bytes is enough for the decimal representation
+    unsigned int status = 0;
+    __bid64_to_string(buf, value, &status);
+
+    // Check for conversion errors
+    if (status != 0) {
+        return "Conversion Error";
+    }
+
+    return std::string(buf);
+}
+
+double DecimalFunctions::decimalToDouble(Decimal value) {
+    unsigned int status = 0;
+    // Use the external function to convert the decimal to double.
+    double result = __bid64_to_binary64(value, 0, &status);
+
+    // Check for conversion errors
+    if (status != 0) {
+        // Optionally, log or handle the error here.
+        return 0.0; // Return 0.0 as a fallback in case of an error.
+    }
+
+    return result;
+}
+
 // Implement other functions if needed...

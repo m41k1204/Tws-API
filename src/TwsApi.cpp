@@ -6,6 +6,7 @@
 #include <functional>
 #include <algorithm>  // for std::find
 #include <ctime>  // for time()
+#include <memory>
 
 
 
@@ -147,28 +148,28 @@ OrderResult TwsApi::submit_order_stock(const std::string& symbol, int qty, const
         parent.transmit = false;
     }
 
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        parentOrderId = m_nextOrderId++;
-    }
-    parent.orderId = parentOrderId;
-    parent.orderRef = client_order_id;
-    parent.transmit = !is_bracket;
-
     OrderResult result;
     result.orderId = parent.orderId;
+    result.orderRef = parent.orderRef;
     result.status = is_bracket ? "Bracket Pending" : "Pending";
+    result.symbol = symbol;
+    result.side = parent.action;
+    result.qty = qty;
+    result.orderType = parent.orderType;
+    result.tif = parent.tif;
+    result.limit_price = limit_price;
+    result.stop_price = stop_price;
+    result.assetType = "STK";
+    result.timestamp = std::chrono::system_clock::now();
 
     return result;
 }
-
 
 OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, const std::string& side,
     const std::string& type, const std::string& time_in_force,
     double limit_price, double stop_price, const std::string& client_order_id,
     double bracket_take_profit_price, double bracket_stop_loss_price, bool is_bracket)
 {
-
     Contract contract = createOptionContract(symbol);
 
     Order parent;
@@ -198,6 +199,7 @@ OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, cons
         parentOrderId = m_nextOrderId++;
     }
 
+    parent.orderId = parentOrderId;
     m_client->placeOrder(parentOrderId, contract, parent);
 
     if (is_bracket) {
@@ -231,15 +233,22 @@ OrderResult TwsApi::submit_order_option(const std::string& symbol, int qty, cons
     std::unique_lock<std::mutex> lock(m_mutex);
 
     OrderResult result;
-    if(m_orders.find(parentOrderId) != m_orders.end())
-        result = m_orders[parent.orderId];
-    else {
-        result.orderId = parent.orderId;
-        result.status = is_bracket ? "Bracket Pending" : "Pending";
-    }
+    result.orderId = parent.orderId;
+    result.orderRef = parent.orderRef;
+    result.status = is_bracket ? "Bracket Pending" : "Pending";
+    result.symbol = symbol;
+    result.side = parent.action;
+    result.qty = qty;
+    result.orderType = parent.orderType;
+    result.tif = parent.tif;
+    result.limit_price = limit_price;
+    result.stop_price = stop_price;
+    result.assetType = "OPT";
+    result.timestamp = std::chrono::system_clock::now();
 
     return result;
 }
+
 
 
 std::vector<OrderResult> TwsApi::list_orders(const std::string& /*status*/, int limit,
@@ -335,6 +344,7 @@ Position TwsApi::get_position(const std::string& symbol) {
             return pos;
     }
     std::cerr << "error at get_position: " << symbol << " not found" <<  std::endl;
+    return Position {};
 }
 
 // --- Order Modification and Query ---
@@ -412,25 +422,28 @@ std::vector<HistoricalBar> TwsApi::get_historical_data_stocks(const std::string&
 {
     Contract contract = createStockContract(symbol);
     int reqId = std::hash<std::string>{}(symbol) % 10000;
-    // For a real implementation, properly format the endDateTime and calculate durationStr.
-    std::string endDateTime = end;  // This should be in IB’s expected format.
-    std::string durationStr = "1 D";  // Dummy duration
+
+    // IB expects datetime format "YYYYMMDD HH:mm:ss" in GMT
+    const std::string& endDateTime = end;  // Example: "20250324 16:00:00"
+    std::string durationStr = "1 D";
     std::string barSizeSetting = "1 day";
     std::string whatToShow = "TRADES";
     int useRTH = 1;
     int formatDate = 1;
+
     m_client->reqHistoricalData(reqId, contract, endDateTime, durationStr, barSizeSetting, whatToShow, useRTH, formatDate, false, TagValueListSPtr());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     std::unique_lock<std::mutex> lock(m_mutex);
     std::vector<HistoricalBar> bars;
     if(m_historicalData.find(reqId) != m_historicalData.end()) {
         bars = m_historicalData[reqId];
-        if(bars.size() > (size_t)limit)
+        if(bars.size() > static_cast<size_t>(limit))
             bars.resize(limit);
     }
 
     return bars;
 }
+
 
 // Convenience function to get latest trades for one or more symbols.
 void TwsApi::subscribe_stock_trades(const std::string& symbols) {
@@ -479,6 +492,63 @@ void TwsApi::subscribe_option_trades(const std::string& symbols) {
         tickerIds.push_back(tickerId);
     }
 }
+
+void TwsApi::requestOptionMarketData(const std::string& optionSymbol) {
+    Contract contract = createOptionContract(optionSymbol);
+    int tickerId = m_nextTickerId++;
+    m_tickerIdToSymbol[tickerId] = optionSymbol;
+
+    std::string genericTicks = "100,101,106";
+    m_client->reqMktData(tickerId, contract, genericTicks, false, false, TagValueListSPtr());
+}
+
+void TwsApi::tickOptionComputation(TickerId tickerId, TickType tickType, int, double impliedVol, double, double,
+                                   double, double, double, double, double) {
+    std::lock_guard<std::mutex> lock(m_tickMutex);
+    m_optionQuotes[tickerId].impliedVolatility = impliedVol;
+}
+void TwsApi::tickSize(TickerId tickerId, const TickType field, const Decimal size) {
+    std::lock_guard<std::mutex> lock(m_tickMutex);
+
+    if (field == 27 || field == 28)
+        m_optionQuotes[tickerId].volume = size;
+    else if (field == 101)
+        m_optionQuotes[tickerId].volume = size;
+    else if (field == 100)
+        m_optionQuotes[tickerId].volume = size;
+}
+
+OptionQuote TwsApi::getOptionQuote(const std::string& optionSymbol) {
+    Contract contract = createOptionContract(optionSymbol);
+    int tickerId = m_nextTickerId++;
+
+    {
+        std::lock_guard<std::mutex> lock(m_tickMutex);
+        m_tickerIdToSymbol[tickerId] = optionSymbol;
+        m_optionQuotes[tickerId] = {}; // Initialize empty OptionQuote
+    }
+
+    std::string genericTicks = "100,101,106"; // Volume (100), OI (101), IV (106)
+    m_client->reqMktData(tickerId, contract, genericTicks, false, false, TagValueListSPtr());
+
+    // Wait for data (e.g., 2 seconds)
+    std::unique_lock<std::mutex> lock(m_optionQuoteMutex);
+    m_optionQuoteCondition.wait_for(lock, std::chrono::milliseconds(200), [&](){
+        const auto& quote = m_optionQuotes[tickerId];
+        return quote.bidPrice > 0 && quote.ask_price > 0 && quote.impliedVolatility > 0;
+    });
+
+    m_client->cancelMktData(tickerId);
+
+    OptionQuote result;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        result = m_optionQuotes[tickerId];
+    }
+
+    return result;
+}
+
 
 // Convenience function to get latest quotes for one or more option symbols.
 void TwsApi::subscribe_option_quotes(const std::string& symbols) {
@@ -598,7 +668,6 @@ std::vector<std::string> splitSymbolsFilter(const std::string& symbolsStr) {
     return result;
 }
 
-// Filtra trades de los últimos 'seconds' segundos para los símbolos indicados en el string.
 std::vector<Trade> TwsApi::filterTradesForLastSeconds(const std::string& symbols, int seconds) {
     std::vector<std::string> symbolList = splitSymbolsFilter(symbols);
     std::vector<Trade> result;
@@ -655,6 +724,8 @@ void TwsApi::tickPrice(TickerId tickerId, TickType field, double price, const Ti
         else if (field == CLOSE)
             quote.close_price = price;
     }
+    if (field == BID) m_optionQuotes[tickerId].bidPrice = price;
+    else if (field == ASK) m_optionQuotes[tickerId].ask_price = price;
 }
 
 void TwsApi::orderStatus(OrderId orderId, const std::string& status, Decimal /*filled*/,
@@ -720,17 +791,46 @@ void TwsApi::cancelMarketData(int tickerId) {
     m_client->cancelMktData(tickerId);
 }
 
+double TwsApi::getCashBalance() {
+    std::unique_lock<std::mutex> lock(m_accountMutex);
+    m_accountSummaryReceived = false;  // Reset flag before making the request
+
+    m_client->reqAccountSummary(9001, "All", "TotalCashValue");
+
+    m_accountCondVar.wait(lock, [this]() { return m_accountSummaryReceived; });
+
+    m_client->cancelAccountSummary(9001);
+
+    auto it = m_accountValues.find("TotalCashValue");
+    if (it != m_accountValues.end()) {
+        return std::stod(it->second);
+    }
+    return 0.0;
+}
+
+
+void TwsApi::accountSummary(int reqId, const std::string& account, const std::string& tag, const std::string& value, const std::string& currency) {
+    if (reqId == 9001) {
+        {
+            std::lock_guard<std::mutex> lock(m_accountMutex);
+            m_accountValues[tag] = value;
+            m_accountSummaryReceived = true;
+        }
+        m_accountCondVar.notify_one();
+        std::cout << "Account Summary Received: " << tag << " = " << value << " " << currency << std::endl;
+    }
+}
+
+
+
 
 // --- Other callbacks are left with empty implementations or basic logging ---
 
-void TwsApi::tickSize(TickerId, TickType, Decimal) { }
-void TwsApi::tickOptionComputation(TickerId, TickType, int, double, double, double, double, double, double, double, double) { }
 void TwsApi::tickGeneric(TickerId, TickType, double) { }
 void TwsApi::tickString(TickerId, TickType, const std::string&) { }
 void TwsApi::tickEFP(TickerId, TickType, double, const std::string&, double, int, const std::string&, double, double) { }
 void TwsApi::winError(const std::string&, int) { }
 void TwsApi::connectionClosed() { }
-void TwsApi::updateAccountValue(const std::string&, const std::string&, const std::string&, const std::string&) { }
 void TwsApi::updatePortfolio(const Contract&, Decimal, double, double, double, double, double, const std::string&) { }
 void TwsApi::updateAccountTime(const std::string&) { }
 void TwsApi::accountDownloadEnd(const std::string&) { }
@@ -772,7 +872,6 @@ void TwsApi::position(const std::string& /*account*/, const Contract& contract, 
     m_positions.push_back(pos);
 }
 void TwsApi::positionEnd() { }
-void TwsApi::accountSummary(int, const std::string&, const std::string&, const std::string&, const std::string&) { }
 void TwsApi::accountSummaryEnd(int) { }
 void TwsApi::verifyMessageAPI(const std::string&) { }
 void TwsApi::verifyCompleted(bool, const std::string&) { }
@@ -820,5 +919,7 @@ void TwsApi::wshEventData(int, const std::string&) { }
 void TwsApi::historicalSchedule(int, const std::string&, const std::string&, const std::string&, const std::vector<HistoricalSession>&) { }
 void TwsApi::userInfo(int, const std::string&) { }
 void TwsApi::currentTimeInMillis(time_t) { }
+void TwsApi::updateAccountValue(const std::string& key, const std::string& val,
+        const std::string& currency, const std::string& accountName) { } ;
     // Empty implementation for now.
 

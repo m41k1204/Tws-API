@@ -34,6 +34,10 @@ int main() {
         std::cout << "11: Modificar orden" << std::endl;
         std::cout << "12: Obtener datos históricos para acciones" << std::endl;
         std::cout << "13: Recibir data del mercado" << std::endl;
+        std::cout << "14: Filtrar trades por simbolo y tiempo" << std::endl;
+        std::cout << "15: Filtrar quotes por simbolo y tiempo" << std::endl;
+        std::cout << "16: Recibir data de mercado para opciones (IV y OI)" << std::endl;
+        std::cout << "17: Recibir cash amount" << std::endl;
         std::cout << "0: Salir" << std::endl;
         std::cout << "Ingrese una opción: ";
 
@@ -78,8 +82,8 @@ int main() {
             OrderResult resultado = api.submit_order_stock(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop,
                                                       idOrdenCliente, precioTakeProfit, precioStopLoss, is_bracket);
 
-            std::cout << "Orden de acciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
-            break;
+            api.printOrderResult(resultado);
+                break;
         }
 
         case 2: { // Enviar orden de opciones
@@ -118,9 +122,8 @@ int main() {
 
             OrderResult resultado = api.submit_order_option(simbolo, cantidad, lado, tipo, tif, precioLimite, precioStop,
                                                             idOrdenCliente, precioTakeProfit, precioStopLoss, is_bracket);
-
-            std::cout << "Orden de opciones enviada: id = " << resultado.orderId << ", estado = " << resultado.status << std::endl;
-            break;
+                api.printOrderResult(resultado);
+                break;
 }
             case 3: { // Listar órdenes
                 std::string estado, despues, hasta, direccion, simbolos, filtroLado;
@@ -250,8 +253,6 @@ int main() {
                 int limite;
                 std::cout << "Ingrese el símbolo de la acción: ";
                 std::cin >> simbolo;
-                std::cout << "Ingrese el datetime de inicio: ";
-                std::cin >> inicio;
                 std::cout << "Ingrese el datetime de fin: ";
                 std::cin >> fin;
                 std::cout << "Ingrese el límite de registros: ";
@@ -312,7 +313,27 @@ int main() {
                 }
                 break;
             }
+            case 16: {
+                std::string optionSymbol;
+                std::cout << "Ingrese el símbolo de la opción (ej: AAPL240419C00170000): ";
+                std::cin >> optionSymbol;
 
+                OptionQuote quote = api.getOptionQuote(optionSymbol);
+
+                std::cout << std::fixed << std::setprecision(4)
+                          << "\n--- Datos recibidos para la opción ---\n"
+                          << "Símbolo: " << optionSymbol << "\n"
+                          << "Bid Price: " << quote.bidPrice << "\n"
+                          << "Ask Price: " << quote.ask_price << "\n"
+                          << "Volume: " << quote.volume << "\n"
+                          << "Implied Volatility: " << quote.impliedVolatility << "\n";
+                break;
+            }
+            case 17: {
+                double cash_amount = api.getCashBalance();
+                std::cout << "Cash: " << cash_amount << std::endl;
+                break;
+            }
             case 0:
                 ejecutando = false;
                 break;

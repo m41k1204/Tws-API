@@ -1,0 +1,66 @@
+Cambios para recibir cash amount:
+
+En TwsApi.h:
+
+agregar los siguientes parametros al final de la clase tws:
+
+std::map<std::string, std::string> m_accountValues;
+std::condition_variable m_accountCondVar;
+std::mutex m_accountMutex;
+bool m_accountSummaryReceived = false;
+
+agregar la siguiente definicion en la clase de TwsApi
+
+double getCashBalance() ;
+
+
+En TwsApi.cpp:
+
+agregar estas dos nuevas funciones:
+
+double TwsApi::getCashBalance() {
+    std::unique_lock<std::mutex> lock(m_accountMutex);
+    m_accountSummaryReceived = false;  // Reset flag before making the request
+
+    m_client->reqAccountSummary(9001, "All", "TotalCashValue");
+
+    m_accountCondVar.wait(lock, [this]() { return m_accountSummaryReceived; });
+
+    m_client->cancelAccountSummary(9001);
+
+    auto it = m_accountValues.find("TotalCashValue");
+    if (it != m_accountValues.end()) {
+        return std::stod(it->second);
+    }
+    return 0.0;
+}
+
+
+void TwsApi::accountSummary(int reqId, const std::string& account, const std::string& tag, const std::string& value, const std::string& currency) {
+    if (reqId == 9001) {
+        {
+            std::lock_guard<std::mutex> lock(m_accountMutex);
+            m_accountValues[tag] = value;
+            m_accountSummaryReceived = true;
+        }
+        m_accountCondVar.notify_one();
+        std::cout << "Account Summary Received: " << tag << " = " << value << " " << currency << std::endl;
+    }
+}
+
+eliminar la definicion de accountSummary al final de TwsApi.cpp para no tener definiciones duplicadas.
+
+
+En main.cpp:
+
+Agregar esta opcion en el menu:
+       
+ std::cout << "17: Recibir cash amount" << std::endl;
+
+Agregar el case 17:
+
+case 17: {
+                double cash_amount = api.getCashBalance();
+                std::cout << "Cash: " << cash_amount << std::endl;
+                break;
+            }

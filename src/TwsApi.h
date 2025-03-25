@@ -9,6 +9,7 @@
 #include <optional>
 #include <unordered_map>
 #include <ctime>  // for time()
+#include <iomanip>
 #include <iostream>
 
 
@@ -32,6 +33,15 @@ struct OrderResult {
     double stop_price = 0.0;
     std::string assetType = "";
     std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::time_point{};
+
+};
+
+struct OptionQuote {
+    std::string symbol;
+    double bidPrice = 0.0;
+    double ask_price = 0.0;
+    Decimal volume = 0;
+    double impliedVolatility = 0.0;
 };
 
 
@@ -123,6 +133,22 @@ public:
                   << "tickType=" << t.tickType
                   << std::endl;
     }
+
+    static void printOrderResult(const OrderResult& order) {
+        std::cout << "OrderResult: {\n"
+                  << "  orderId: " << order.orderId << "\n"
+                  << "  orderRef: " << order.orderRef << "\n"
+                  << "  status: " << order.status << "\n"
+                  << "  symbol: " << order.symbol << "\n"
+                  << "  side: " << order.side << "\n"
+                  << "  qty: " << order.qty << "\n"
+                  << "  orderType: " << order.orderType << "\n"
+                  << "  tif: " << order.tif << "\n"
+                  << "  limit_price: " << order.limit_price << "\n"
+                  << "  stop_price: " << order.stop_price << "\n"
+                  << "  assetType: " << order.assetType << "\n"
+                  << "}" << std::endl;
+    }
     // Position functions
     std::vector<Position> list_positions();
     Position get_position(const std::string& symbol);
@@ -133,6 +159,10 @@ public:
 
     void subscribe_option_trades(const std::string& symbols);
     void subscribe_option_quotes(const std::string& symbols);
+
+    void requestOptionMarketData(const std::string& optionSymbol);
+
+    OptionQuote getOptionQuote(const std::string& optionSymbol);
 
     // Order modification and query
     OrderResult change_order_by_order_id(OrderId order_id,
@@ -149,6 +179,8 @@ public:
     // NEW: Request all open orders from TWS.
     void reqAllOpenOrders();
 
+    double getCashBalance() ;
+
     // --- EWrapper callbacks ---
 
     // void reqTickByTickData(int tickerId, const Contract& contract,
@@ -156,7 +188,7 @@ public:
     void cancelTickByTickData(int tickerId);
 
 
-    virtual void tickByTickAllLast(int reqId, int tickType, time_t time, double price,
+    void tickByTickAllLast(int reqId, int tickType, time_t time, double price,
                                    Decimal size, const TickAttribLast& tickAttribLast,
                                    const std::string& exchange, const std::string& specialConditions) override;
 
@@ -167,7 +199,7 @@ public:
 
 
     virtual void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override;
-    virtual void tickSize(TickerId tickerId, TickType field, Decimal size) override;
+    virtual void tickSize(TickerId tickerId, TickType field, Decimal size = 0) override;
     virtual void tickOptionComputation( TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta,
         double optPrice, double pvDividend, double gamma, double vega, double theta, double undPrice) override;
     virtual void tickGeneric(TickerId tickerId, TickType tickType, double value) override;
@@ -287,6 +319,15 @@ public:
     std::mutex m_tickMutex;
     std::vector<Trade> m_latestTrades;
     std::vector<Quote> m_latestQuotes;
+
+    std::map<std::string, std::string> m_accountValues;
+    std::condition_variable m_accountCondVar;
+    std::mutex m_accountMutex;
+    bool m_accountSummaryReceived = false;
+
+    std::mutex m_optionQuoteMutex;
+    std::condition_variable m_optionQuoteCondition;
+    std::map<int, OptionQuote> m_optionQuotes; // keyed by tickerId
 
     // Helper functions to build IB contracts
     Contract createStockContract(const std::string& symbol);
